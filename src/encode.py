@@ -1,6 +1,5 @@
 #!/usr/bin/python3
 
-import os
 import re
 import subprocess
 from tempfile import TemporaryFile
@@ -8,8 +7,8 @@ from typing import Callable, List, Optional, Tuple
 
 OPTIMAL_AUDIO_CODECS = {'aac', 'opus'}
 COPYABLE_SUB_CODECS = {'subrip', 'ass', 'webvtt'}
+MKV_NATIVE_SUB_CODECS = {'dvd_subtitle', 'hdmf_pgs'}
 FORMAT_NAMES = {'mkv': 'matroska', 'mp4': 'mp4'}
-
 
 OPUS_MAX_BITRATE = 512000
 
@@ -48,23 +47,18 @@ def build_audio_plan(info: dict) -> List[dict]:
     return plan
 
 
-def build_subtitle_plan(info: dict) -> Tuple[List[dict], List[dict]]:
+def build_subtitle_plan(info: dict, container: str = 'mkv') -> Tuple[List[dict], List[dict]]:
     kept = []
     dropped = []
+    copyable = set(COPYABLE_SUB_CODECS)
+    if container == 'mkv':
+        copyable |= MKV_NATIVE_SUB_CODECS
     for ordinal, sub in enumerate(info['subs']):
-        if sub['codec'] in COPYABLE_SUB_CODECS:
+        if sub['codec'] in copyable:
             kept.append({**sub, 'ordinal': ordinal})
         else:
             dropped.append(sub)
     return kept, dropped
-
-
-def _common_head(file_input: str, hw: bool) -> List[str]:
-    cmd = ['ffmpeg', '-y', '-progress', 'pipe:1']
-    if hw:
-        cmd.extend(['-vaapi_device', '/dev/dri/renderD128'])
-    cmd.extend(['-i', file_input])
-    return cmd
 
 
 def _hw_vf(bit_depth: int) -> str:
@@ -72,111 +66,67 @@ def _hw_vf(bit_depth: int) -> str:
     return f'format={fmt},hwupload'
 
 
-def build_encode_passes(
+def build_encode_cmd(
     file_input: str,
     file_output: str,
     info: dict,
-    video_bitrate: int,
+    quality_value: int,
     hw: bool,
-    preset: str,
+    preset: Optional[str],
     container: str,
-    log_path: Optional[str],
-) -> List[dict]:
+) -> List[str]:
     video = info['video']
-    audio_plan = build_audio_plan(info)
-    subs_kept, _ = build_subtitle_plan(info)
 
-    passes: List[dict] = []
+    cmd = ['ffmpeg', '-y', '-progress', 'pipe:1']
+    if hw:
+        cmd.extend(['-vaapi_device', '/dev/dri/renderD128'])
+    cmd.extend(['-i', file_input])
 
     if hw:
-        cmd = _common_head(file_input, True)
         cmd.extend(['-vf', _hw_vf(video['bit_depth'])])
         cmd.extend([
             '-c:v', 'av1_vaapi',
-            '-b:v', str(video_bitrate),
+            '-rc_mode:v', 'CQP',
+            '-global_quality:v', str(quality_value),
+        ])
+    else:
+        cmd.extend([
+            '-c:v', 'libsvtav1',
+            '-preset', preset,
+            '-crf', str(quality_value),
+            '-pix_fmt', 'yuv420p10le' if video['bit_depth'] == 10 else 'yuv420p',
         ])
 
-        cmd.extend(['-map', '0:v:0'])
+    cmd.extend(['-map', '0:v:0'])
 
-        for track in audio_plan:
-            cmd.extend(['-map', f'0:a:{track["ordinal"]}'])
-            if track['action'] == 'copy':
-                cmd.extend([f'-c:a:{track["ordinal"]}', 'copy'])
-            else:
-                cmd.extend([
-                    f'-c:a:{track["ordinal"]}', 'libopus',
-                    f'-b:a:{track["ordinal"]}', str(track['bitrate']),
-                    f'-ac:a:{track["ordinal"]}', str(track['channels']),
-                ])
-
-        for sub in subs_kept:
-            cmd.extend(['-map', f'0:s:{sub["ordinal"]}'])
-            if container == 'mkv':
-                cmd.extend([f'-c:s:{sub["ordinal"]}', 'copy'])
-            else:
-                cmd.extend([f'-c:s:{sub["ordinal"]}', 'mov_text'])
-
-        cmd.extend(['-f', FORMAT_NAMES[container], file_output])
-        passes.append({'cmd': cmd, 'pass_num': None})
-        return passes
-
-    pass1 = _common_head(file_input, False)
-    if log_path is not None:
-        pass1.extend(['-passlogfile', log_path])
-    pass1.extend([
-        '-c:v', 'libsvtav1',
-        '-preset', preset,
-        '-b:v', str(video_bitrate),
-        '-pix_fmt', 'yuv420p10le' if video['bit_depth'] == 10 else 'yuv420p',
-        '-pass', '1',
-        '-an', '-sn',
-        '-f', 'null', '/dev/null',
-    ])
-    passes.append({'cmd': pass1, 'pass_num': 0})
-
-    pass2 = _common_head(file_input, False)
-    if log_path is not None:
-        pass2.extend(['-passlogfile', log_path])
-    pass2.extend([
-        '-c:v', 'libsvtav1',
-        '-preset', preset,
-        '-b:v', str(video_bitrate),
-        '-pix_fmt', 'yuv420p10le' if video['bit_depth'] == 10 else 'yuv420p',
-        '-pass', '2',
-    ])
-
-    pass2.extend(['-map', '0:v:0'])
-
+    audio_plan = build_audio_plan(info)
     for track in audio_plan:
-        pass2.extend(['-map', f'0:a:{track["ordinal"]}'])
+        cmd.extend(['-map', f'0:a:{track["ordinal"]}'])
         if track['action'] == 'copy':
-            pass2.extend([f'-c:a:{track["ordinal"]}', 'copy'])
+            cmd.extend([f'-c:a:{track["ordinal"]}', 'copy'])
         else:
-            pass2.extend([
+            cmd.extend([
                 f'-c:a:{track["ordinal"]}', 'libopus',
                 f'-b:a:{track["ordinal"]}', str(track['bitrate']),
                 f'-ac:a:{track["ordinal"]}', str(track['channels']),
             ])
 
+    subs_kept, _ = build_subtitle_plan(info, container)
     for sub in subs_kept:
-        pass2.extend(['-map', f'0:s:{sub["ordinal"]}'])
+        cmd.extend(['-map', f'0:s:{sub["ordinal"]}'])
         if container == 'mkv':
-            pass2.extend([f'-c:s:{sub["ordinal"]}', 'copy'])
+            cmd.extend([f'-c:s:{sub["ordinal"]}', 'copy'])
         else:
-            pass2.extend([f'-c:s:{sub["ordinal"]}', 'mov_text'])
+            cmd.extend([f'-c:s:{sub["ordinal"]}', 'mov_text'])
 
-    pass2.extend(['-f', FORMAT_NAMES[container], file_output])
-    passes.append({'cmd': pass2, 'pass_num': 1})
-
-    return passes
+    cmd.extend(['-f', FORMAT_NAMES[container], file_output])
+    return cmd
 
 
 def get_progress(
     ffmpeg_cmd: List[str],
     output_fn: Callable[[float, Optional[int]], None],
     frame_count: int,
-    pass_num: Optional[int],
-    last_pass_avg_fps: Optional[float],
     cancel_event: Callable[[], bool],
 ) -> Tuple[Optional[float], Optional[str]]:
     with TemporaryFile() as err_file:
@@ -191,7 +141,7 @@ def get_progress(
         fps_sum = 0.0
         pulse_counter = 0
         avg_counter = 0
-        fps: Optional[float] = last_pass_avg_fps
+        fps: Optional[float] = None
 
         if proc.stdout is not None:
             for line in proc.stdout:
@@ -202,9 +152,7 @@ def get_progress(
                     if match:
                         frame = int(match.group())
                 elif line_string.startswith('fps='):
-                    total_frames = frame_count * (1 if pass_num is None else 2)
-                    current_frame = frame_count * (pass_num or 0) + frame
-                    progress_fraction = current_frame / total_frames
+                    progress_fraction = min(frame / max(frame_count, 1), 1.0)
 
                     pulse_counter += 1
                     if pulse_counter >= 10:
@@ -214,18 +162,18 @@ def get_progress(
                             avg_counter += 1
                             fps_sum += fps
 
-                    frames_left = total_frames - current_frame
+                    frames_left = frame_count - frame
                     seconds_left = None
                     if fps and fps > 0:
                         seconds_left = max(int(frames_left // fps), 0)
 
-                    output_fn(min(progress_fraction, 1.0), seconds_left)
+                    output_fn(progress_fraction, seconds_left)
 
                 if cancel_event():
                     proc.kill()
                     return (None, None)
 
-        avg = fps_sum / avg_counter if avg_counter else last_pass_avg_fps
+        avg = fps_sum / avg_counter if avg_counter else None
 
         proc.wait()
         returncode = proc.poll()
@@ -244,27 +192,15 @@ def run_encode(
     file_input: str,
     file_output: str,
     info: dict,
-    video_bitrate: int,
+    quality_value: int,
     hw: bool,
-    preset: str,
+    preset: Optional[str],
     container: str,
-    log_path: Optional[str],
     output_fn: Callable[[float, Optional[int]], None],
     cancel_event: Callable[[], bool],
 ) -> Optional[str]:
-    passes = build_encode_passes(
-        file_input, file_output, info, video_bitrate, hw, preset, container, log_path
+    cmd = build_encode_cmd(
+        file_input, file_output, info, quality_value, hw, preset, container
     )
-
-    last_avg: Optional[float] = None
-    for p in passes:
-        if cancel_event():
-            return None
-        avg, error = get_progress(
-            p['cmd'], output_fn, info['frame_count'], p['pass_num'], last_avg, cancel_event
-        )
-        if error is not None:
-            return error
-        last_avg = avg
-
-    return None
+    _, error = get_progress(cmd, output_fn, info['frame_count'], cancel_event)
+    return error

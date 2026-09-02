@@ -6,34 +6,53 @@ from typing import Dict
 Q_MIN = 1
 Q_MAX = 10
 
-BITRATE_MULTIPLIER: Dict[int, float] = {
-    1: 0.30,
-    2: 0.345,
-    3: 0.396,
-    4: 0.454,
-    5: 0.520,
-    6: 0.597,
-    7: 0.684,
-    8: 0.784,
-    9: 0.899,
-    10: 1.000,
+SVT_CRF_BY_Q: Dict[int, int] = {
+    10: 14,
+    9: 16,
+    8: 18,
+    7: 20,
+    6: 22,
+    5: 24,
+    4: 26,
+    3: 28,
+    2: 31,
+    1: 34,
 }
 
 SVT_PRESET_BY_Q: Dict[int, str] = {
-    1: '10',
-    2: '10',
-    3: '9',
-    4: '8',
+    10: '6',
+    9: '6',
+    8: '7',
+    7: '7',
+    6: '8',
     5: '8',
-    6: '7',
-    7: '6',
-    8: '6',
-    9: '5',
-    10: '4',
+    4: '8',
+    3: '9',
+    2: '9',
+    1: '10',
 }
 
-TOLERANCE_PERCENT = 20.0
+VAAPI_GLOBAL_QUALITY_BY_Q: Dict[int, int] = {
+    10: 28,
+    9: 30,
+    8: 32,
+    7: 34,
+    6: 36,
+    5: 38,
+    4: 40,
+    3: 42,
+    2: 44,
+    1: 46,
+}
 
 
-def multiplier_for_quality(q: int) -> float:
-    return BITRATE_MULTIPLIER[q]
+def crf_for_quality(q: int) -> int:
+    return SVT_CRF_BY_Q[q]
+
+
+def preset_for_quality(q: int) -> str:
+    return SVT_PRESET_BY_Q[q]
+
+
+def vaapi_quality_for_quality(q: int) -> int:
+    return VAAPI_GLOBAL_QUALITY_BY_Q[q]

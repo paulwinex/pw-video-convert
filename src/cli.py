@@ -7,7 +7,6 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from typing import Optional
 
 import probe
@@ -25,6 +24,9 @@ def _sigint_handler(signum, frame):
 
 signal.signal(signal.SIGINT, _sigint_handler)
 
+FILLED = '█'
+EMPTY = '░'
+
 
 def bold(text: str) -> str:
     return f"\033[1m{text}\033[0m"
@@ -35,19 +37,19 @@ def make_progress_printer():
 
     def print_progress(fraction: float, seconds_left: Optional[int]) -> None:
         percent = int(round(fraction * 100, 0))
-        bar_len = max(columns - 30, 10)
+        bar_len = max(columns - 32, 10)
         filled = int(bar_len * fraction)
-        bar = '#' * filled + '-' * (bar_len - filled)
+        bar = FILLED * filled + EMPTY * (bar_len - filled)
 
         if seconds_left is None:
-            line = f'\r {percent}% [{bar}]'
+            line = f' {percent:>3}% [{bar}] ETA --:--'
         else:
             hours, rem = divmod(seconds_left, 3600)
             mins, secs = divmod(rem, 60)
             eta = f'{hours}:{mins:02d}:{secs:02d}' if hours else f'{mins}:{secs:02d}'
-            line = f'\r {percent}% [{bar}] ETA {eta}'
+            line = f' {percent:>3}% [{bar}] ETA {eta}'
 
-        print(bold(line.ljust(columns)), end='', flush=True)
+        print('\r'+bold(line.ljust(columns)), end='', flush=True)
 
     return print_progress
 
@@ -58,17 +60,17 @@ def resolve_output(file_input: Path, output_arg: Optional[str], q: int, containe
     if output_arg is None:
         target_dir = file_input.parent
     else:
-        candidate = Path(output_arg)
+        candidate = Path(output_arg).expanduser()
         if candidate.is_dir() or output_arg.endswith(os.sep):
             target_dir = candidate
         else:
-            return candidate
+            return candidate.resolve()
 
     stem = file_input.stem
     same_dir = target_dir.resolve() == file_input.parent.resolve()
 
     name = f'{stem}.q{q}.av1.{ext}' if same_dir else f'{stem}.{ext}'
-    return target_dir / name
+    return (target_dir / name).resolve()
 
 
 def fmt_size(size_bytes: int) -> str:
@@ -83,19 +85,22 @@ def main() -> int:
         prog='constrict-mod',
         description=(
             'Re-encode video to AV1 with a quality scale q=1..10. '
-            'q=10 keeps the source video bitrate; lower levels reduce it. '
-            'Resolution, framerate, all audio tracks and subtitles are preserved. '
-            'Audio in non-optimal codecs is re-encoded to Opus at high quality.'
+            'q=10 is near-transparent (film grain preserved); lower levels trade '
+            'quality for size. Resolution, framerate, all audio tracks and subtitles '
+            'are preserved. Audio in non-optimal codecs is re-encoded to Opus at '
+            'high quality without loudness change.'
         ),
     )
     parser.add_argument('-q', dest='quality', type=int, choices=range(1, 11),
                         metavar='1..10', default=5,
-                        help='Quality level: multiplier on source video bitrate '
-                             '(q10 = same bitrate as source)')
+                        help='Quality level (default 5): perceptual tier from '
+                             'source-preserving (10) to small-and-acceptable (1)')
     parser.add_argument('-c', dest='container', choices=['mkv', 'mp4'], default='mkv',
                         help='Output container (default mkv)')
-    parser.add_argument('--software', action='store_true',
-                        help='Force software SVT-AV1 encoding instead of hardware VAAPI')
+    parser.add_argument('--hw', action='store_true',
+                        help='Use hardware VAAPI AV1 encoder (fast; RDNA3 HW AV1 is '
+                             'less efficient than SVT-AV1 software, so files are '
+                             'larger at equal q). Default: software SVT-AV1.')
     parser.add_argument('input', type=str, help='Source video file')
     parser.add_argument('output', nargs='?', default=None,
                         help='Target directory or output file path. '
@@ -103,7 +108,7 @@ def main() -> int:
 
     args = parser.parse_args()
 
-    file_input = Path(args.input)
+    file_input = Path(args.input).expanduser().resolve()
     if not file_input.is_file():
         print(f'Error: input file not found: {file_input}', file=sys.stderr)
         return 1
@@ -115,25 +120,32 @@ def main() -> int:
         return 1
 
     source_size = info['size']
-    source_video_bitrate = probe.estimate_video_bitrate(info)
-    fps = info['video']['fps'] if info['video']['fps'] != -1 else 60.0
 
-    hw = not args.software and probe.will_ha_work()
-    encoder_name = 'av1_vaapi (hardware)' if hw else f'libsvtav1 preset {quality.SVT_PRESET_BY_Q[args.quality]} (software, 2-pass)'
+    use_hw = args.hw and probe.will_ha_work()
+    if args.hw and not probe.will_ha_work():
+        print('Warning: hardware VAAPI AV1 unavailable, falling back to software SVT-AV1')
+
+    if use_hw:
+        quality_value = quality.vaapi_quality_for_quality(args.quality)
+        preset = None
+        encoder_name = f'av1_vaapi CQP qp={quality_value} (hardware)'
+    else:
+        quality_value = quality.crf_for_quality(args.quality)
+        preset = quality.preset_for_quality(args.quality)
+        encoder_name = f'libsvtav1 preset {preset} crf {quality_value} (software)'
 
     output_path = resolve_output(file_input, args.output, args.quality, args.container)
-    if output_path.resolve() == file_input.resolve():
+    if output_path == file_input:
         print('Error: output path resolves to the input file', file=sys.stderr)
         return 1
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     audio_plan = encode.build_audio_plan(info)
-    subs_kept, subs_dropped = encode.build_subtitle_plan(info)
+    subs_kept, subs_dropped = encode.build_subtitle_plan(info, args.container)
 
     print(f'Input: {file_input} ({fmt_size(source_size)})')
-    print(f'Source video bitrate: ~{source_video_bitrate // 1000} kbps, '
-          f'{info["video"]["width"]}x{info["video"]["height"]}, '
+    print(f'Source: {info["video"]["width"]}x{info["video"]["height"]}, '
           f'{info["video"]["bit_depth"]}-bit'
           + (', HDR metadata present' if info['video']['hdr'] else ''))
     print(f'Encoder: {encoder_name}')
@@ -154,64 +166,31 @@ def main() -> int:
 
     progress_fn = make_progress_printer()
 
-    factor = quality.multiplier_for_quality(args.quality)
-    attempts = 0
-    final_size = 0
+    if output_path.exists():
+        output_path.unlink()
 
-    with TemporaryDirectory(prefix='constrict-mod-pass-') as tmpdir:
-        log_path = None if hw else f'{tmpdir}/ffmpeg2pass'
+    error = encode.run_encode(
+        str(file_input), str(output_path), info, quality_value,
+        use_hw, preset, args.container, progress_fn, lambda: CANCELLED,
+    )
 
-        while True:
-            attempts += 1
-            video_bitrate = round(source_video_bitrate * factor)
-            expected_bits = (
-                video_bitrate * info['duration']
-                + sum(t['bitrate'] * info['duration'] for t in audio_plan if t['bitrate'])
-            )
-            expected_bytes = int(expected_bits / 8 * 1.02)
+    print()
 
-            print(f'\n:: Attempt {attempts} -- video {video_bitrate // 1000} kbps '
-                  f'(q{args.quality}, factor {factor:.3f}), target ~{fmt_size(expected_bytes)}')
+    if CANCELLED:
+        print('*** Cancelled ***')
+        if output_path.exists():
+            output_path.unlink()
+        return 130
 
-            if output_path.exists():
-                output_path.unlink()
+    if error is not None:
+        print(f'*** ENCODE ERROR ***\n{error}', file=sys.stderr)
+        if output_path.exists():
+            output_path.unlink()
+        return 1
 
-            error = encode.run_encode(
-                str(file_input), str(output_path), info, video_bitrate,
-                hw, quality.SVT_PRESET_BY_Q[args.quality], args.container,
-                log_path, progress_fn, lambda: CANCELLED,
-            )
-
-            print()
-
-            if CANCELLED:
-                print('*** Cancelled ***')
-                if output_path.exists():
-                    output_path.unlink()
-                return 130
-
-            if error is not None:
-                print(f'*** ENCODE ERROR ***\n{error}', file=sys.stderr)
-                if output_path.exists():
-                    output_path.unlink()
-                return 1
-
-            final_size = os.stat(output_path).st_size
-            percent_of_target = (final_size / expected_bytes) * 100.0
-
-            print(f'   Result: {fmt_size(final_size)} ({percent_of_target:.1f}% of target)')
-
-            if percent_of_target <= 100 + quality.TOLERANCE_PERCENT:
-                break
-
-            if attempts >= 4 or video_bitrate <= 5000:
-                print('   Stopping: overshoot could not be corrected within tolerance.')
-                break
-
-            factor *= 0.98 * (100 / percent_of_target)
-
+    final_size = os.stat(output_path).st_size
     savings = (1 - final_size / source_size) * 100.0
-    print(f'\nDone: {output_path} ({fmt_size(final_size)})')
+    print(f'Done: {output_path} ({fmt_size(final_size)})')
     print(f'Savings vs source: {savings:.1f}% '
           f'({fmt_size(source_size)} -> {fmt_size(final_size)})')
     return 0
