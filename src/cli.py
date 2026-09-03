@@ -6,8 +6,9 @@ import signal
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional, Tuple
 
 import probe
 import quality
@@ -80,75 +81,27 @@ def fmt_size(size_bytes: int) -> str:
     return f'{mib:.1f} MiB'
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(
-        prog='constrict-mod',
-        description=(
-            'Re-encode video to AV1 with a quality scale q=1..10. '
-            'q=10 is near-transparent (film grain preserved); lower levels trade '
-            'quality for size. Resolution, framerate, all audio tracks and subtitles '
-            'are preserved. Audio in non-optimal codecs is re-encoded to Opus at '
-            'high quality without loudness change.'
-        ),
-    )
-    parser.add_argument('-q', dest='quality', type=int, choices=range(1, 11),
-                        metavar='1..10', default=5,
-                        help='Quality level (default 5): perceptual tier from '
-                             'source-preserving (10) to small-and-acceptable (1)')
-    parser.add_argument('-c', dest='container', choices=['mkv', 'mp4'], default='mkv',
-                        help='Output container (default mkv)')
-    parser.add_argument('--hw', action='store_true',
-                        help='Use hardware VAAPI AV1 encoder (fast; RDNA3 HW AV1 is '
-                             'less efficient than SVT-AV1 software, so files are '
-                             'larger at equal q). Default: software SVT-AV1.')
-    parser.add_argument('input', type=str, help='Source video file')
-    parser.add_argument('output', nargs='?', default=None,
-                        help='Target directory or output file path. '
-                             'If it matches the source directory, a .qN.av1 suffix is added.')
+TEST_QUALITIES: List[int] = [1, 3, 5, 7, 9]
 
-    args = parser.parse_args()
 
-    file_input = Path(args.input).expanduser().resolve()
-    if not file_input.is_file():
-        print(f'Error: input file not found: {file_input}', file=sys.stderr)
-        return 1
-
-    try:
-        info = probe.get_media_info(str(file_input))
-    except (subprocess.CalledProcessError, ValueError) as e:
-        print(f'Error: could not read video properties ({e})', file=sys.stderr)
-        return 1
-
-    source_size = info['size']
-
-    use_hw = args.hw and probe.will_ha_work()
-    if args.hw and not probe.will_ha_work():
-        print('Warning: hardware VAAPI AV1 unavailable, falling back to software SVT-AV1')
-
+def encoder_for(q: int, use_hw: bool) -> Tuple[int, Optional[str], str]:
     if use_hw:
-        quality_value = quality.vaapi_quality_for_quality(args.quality)
-        preset = None
-        encoder_name = f'av1_vaapi CQP qp={quality_value} (hardware)'
-    else:
-        quality_value = quality.crf_for_quality(args.quality)
-        preset = quality.preset_for_quality(args.quality)
-        encoder_name = f'libsvtav1 preset {preset} crf {quality_value} (software)'
+        qv = quality.vaapi_quality_for_quality(q)
+        return qv, None, f'av1_vaapi CQP qp={qv} (hardware)'
+    preset = quality.preset_for_quality(q)
+    return quality.crf_for_quality(q), preset, \
+        f'libsvtav1 preset {preset} crf {quality.crf_for_quality(q)} (software)'
 
-    output_path = resolve_output(file_input, args.output, args.quality, args.container)
-    if output_path == file_input:
-        print('Error: output path resolves to the input file', file=sys.stderr)
-        return 1
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+def print_plan(info: dict, encoder_name: str, container: str) -> None:
+    print(f'Input: {info["source"]} ({fmt_size(info["size"])})')
+    video = info['video']
+    print(f'Source: {video["width"]}x{video["height"]}, {video["bit_depth"]}-bit'
+          + (', HDR metadata present' if video['hdr'] else ''))
+    print(f'Encoder: {encoder_name}')
 
     audio_plan = encode.build_audio_plan(info)
-    subs_kept, subs_dropped = encode.build_subtitle_plan(info, args.container)
-
-    print(f'Input: {file_input} ({fmt_size(source_size)})')
-    print(f'Source: {info["video"]["width"]}x{info["video"]["height"]}, '
-          f'{info["video"]["bit_depth"]}-bit'
-          + (', HDR metadata present' if info['video']['hdr'] else ''))
-    print(f'Encoder: {encoder_name}')
+    subs_kept, subs_dropped = encode.build_subtitle_plan(info, container)
 
     audio_summary = ', '.join(
         f'a{t["ordinal"]} {t["codec"]}->copy' if t['action'] == 'copy'
@@ -157,12 +110,24 @@ def main() -> int:
     )
     print(f'Audio: {audio_summary or "none"}')
     subs_summary = ', '.join(
-        f's{s["ordinal"]} {s["codec"]}->{"copy" if args.container == "mkv" else "mov_text"}'
+        f's{s["ordinal"]} {s["codec"]}->{"copy" if container == "mkv" else "mov_text"}'
         for s in subs_kept
     )
     dropped_summary = ', '.join(f'{d["codec"]} dropped' for d in subs_dropped)
     print(f'Subtitles: {subs_summary or "none"}'
           + (f'; dropped: {dropped_summary}' if subs_dropped else ''))
+
+
+def encode_once(file_input: Path, output_path: Path, q: int,
+                use_hw: bool, container: str) -> int:
+    info = probe.get_media_info(str(file_input))
+    info['source'] = str(file_input)
+    source_size = info['size']
+
+    quality_value, preset, encoder_name = encoder_for(q, use_hw)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    print_plan(info, encoder_name, container)
 
     progress_fn = make_progress_printer()
 
@@ -171,7 +136,7 @@ def main() -> int:
 
     error = encode.run_encode(
         str(file_input), str(output_path), info, quality_value,
-        use_hw, preset, args.container, progress_fn, lambda: CANCELLED,
+        use_hw, preset, container, progress_fn, lambda: CANCELLED,
     )
 
     print()
@@ -194,6 +159,106 @@ def main() -> int:
     print(f'Savings vs source: {savings:.1f}% '
           f'({fmt_size(source_size)} -> {fmt_size(final_size)})')
     return 0
+
+
+def run_test(file_input: Path, args, use_hw: bool) -> int:
+    info = probe.get_media_info(str(file_input))
+    target_dir = (Path(args.output).expanduser().resolve()
+                  if args.output else file_input.parent)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    ext = 'mkv' if args.container == 'mkv' else 'mp4'
+
+    duration = info['duration']
+    depth = min(60, max(int(duration), 1))
+    start = max(int(duration) // 2 - depth // 2, 0)
+    print(f'Test mode: cutting {depth}s from {file_input.name} and encoding '
+          f'q={TEST_QUALITIES} into {target_dir}')
+
+    seg_fd, seg_path = tempfile.mkstemp(prefix='.constrict_test_', suffix='.mkv')
+    os.close(seg_fd)
+    try:
+        cut = subprocess.run(
+            ['ffmpeg', '-y', '-hide_banner', '-ss', str(start), '-i', str(file_input),
+             '-t', str(depth), '-map', '0', '-c', 'copy', seg_path],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        if cut.returncode != 0:
+            print('Error: failed to cut test segment', file=sys.stderr)
+            return 1
+
+        overall = 0
+        for q in TEST_QUALITIES:
+            if CANCELLED:
+                print('*** Cancelled ***')
+                return 130
+            out = target_dir / f'{file_input.stem}.q{q}.{ext}'
+            print(f'\n=== q{q} ===')
+            code = encode_once(Path(seg_path), out, q, use_hw, args.container)
+            if code != 0:
+                overall = code
+                break
+        return overall
+    finally:
+        try:
+            os.unlink(seg_path)
+        except OSError:
+            pass
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        prog='constrict-mod',
+        description=(
+            'Re-encode video to AV1 with a quality scale q=1..10. '
+            'q=10 is near-transparent (film grain preserved); lower levels trade '
+            'quality for size. Resolution, framerate, all audio tracks and subtitles '
+            'are preserved. Audio in non-optimal codecs is re-encoded to Opus at '
+            'high quality without loudness change.'
+        ),
+    )
+    parser.add_argument('-q', dest='quality', type=int, choices=range(1, 11),
+                        metavar='1..10', default=5,
+                        help='Quality level (default 5): perceptual tier from '
+                             'source-preserving (10) to small-and-acceptable (1)')
+    parser.add_argument('-c', dest='container', choices=['mkv', 'mp4'], default='mkv',
+                        help='Output container (default mkv)')
+    parser.add_argument('--software', action='store_true',
+                        help='Use software SVT-AV1 (slower but better quality; '
+                             'default is hardware VAAPI AV1)')
+    parser.add_argument('-t', dest='test', action='store_true',
+                        help='Test mode: cut 1 minute from the middle and encode '
+                             'samples at q=1,3,5,7,9 into the output directory.')
+    parser.add_argument('input', type=str, help='Source video file')
+    parser.add_argument('output', nargs='?', default=None,
+                        help='Target directory or output file path. '
+                             'If it matches the source directory, a .qN.av1 suffix is added.')
+
+    args = parser.parse_args()
+
+    file_input = Path(args.input).expanduser().resolve()
+    if not file_input.is_file():
+        print(f'Error: input file not found: {file_input}', file=sys.stderr)
+        return 1
+
+    try:
+        probe.get_media_info(str(file_input))
+    except (subprocess.CalledProcessError, ValueError) as e:
+        print(f'Error: could not read video properties ({e})', file=sys.stderr)
+        return 1
+
+    use_hw = (not args.software) and probe.will_ha_work()
+    if not args.software and not probe.will_ha_work():
+        print('Warning: hardware VAAPI AV1 unavailable, falling back to software SVT-AV1')
+
+    if args.test:
+        return run_test(file_input, args, use_hw)
+
+    output_path = resolve_output(file_input, args.output, args.quality, args.container)
+    if output_path == file_input:
+        print('Error: output path resolves to the input file', file=sys.stderr)
+        return 1
+
+    return encode_once(file_input, output_path, args.quality, use_hw, args.container)
 
 
 if __name__ == '__main__':
