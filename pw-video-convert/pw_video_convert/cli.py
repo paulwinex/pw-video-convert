@@ -10,9 +10,9 @@ import tempfile
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-import probe
-import quality
-import encode
+from . import probe
+from . import quality
+from . import encode
 
 
 CANCELLED = False
@@ -222,7 +222,7 @@ def main() -> int:
                              'source-preserving (10) to small-and-acceptable (1)')
     parser.add_argument('-c', dest='container', choices=['mkv', 'mp4'], default='mkv',
                         help='Output container (default mkv)')
-    parser.add_argument('--software', action='store_true',
+    parser.add_argument('-s', '--software', action='store_true',
                         help='Use software SVT-AV1 (slower but better quality; '
                              'default is hardware VAAPI AV1)')
     parser.add_argument('-t', dest='test', action='store_true',
