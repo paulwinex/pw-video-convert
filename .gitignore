@@ -2,3 +2,7 @@ __pycache__/
 *.pyc
 .idea/
 .vscode/
+backend/data/
+backend/.venv/
+.venv/
+data/
