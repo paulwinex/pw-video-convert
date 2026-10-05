@@ -1,5 +1,3 @@
-#!/usr/bin/python3
-
 import re
 import subprocess
 from tempfile import TemporaryFile
