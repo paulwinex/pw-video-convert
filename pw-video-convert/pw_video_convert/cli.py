@@ -8,7 +8,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 from . import probe
 from . import quality
@@ -119,7 +119,9 @@ def print_plan(info: dict, encoder_name: str, container: str) -> None:
 
 
 def encode_once(file_input: Path, output_path: Path, q: int,
-                use_hw: bool, container: str) -> int:
+                use_hw: bool, container: str,
+                progress_fn: Optional[Callable[[float, Optional[int]], None]] = None,
+                cancel_fn: Optional[Callable[[], bool]] = None) -> int:
     info = probe.get_media_info(str(file_input))
     info['source'] = str(file_input)
     source_size = info['size']
@@ -129,19 +131,20 @@ def encode_once(file_input: Path, output_path: Path, q: int,
     output_path.parent.mkdir(parents=True, exist_ok=True)
     print_plan(info, encoder_name, container)
 
-    progress_fn = make_progress_printer()
+    on_progress = progress_fn if progress_fn is not None else make_progress_printer()
+    is_cancelled = cancel_fn if cancel_fn is not None else (lambda: CANCELLED)
 
     if output_path.exists():
         output_path.unlink()
 
     error = encode.run_encode(
         str(file_input), str(output_path), info, quality_value,
-        use_hw, preset, container, progress_fn, lambda: CANCELLED,
+        use_hw, preset, container, on_progress, is_cancelled,
     )
 
     print()
 
-    if CANCELLED:
+    if is_cancelled():
         print('*** Cancelled ***')
         if output_path.exists():
             output_path.unlink()
