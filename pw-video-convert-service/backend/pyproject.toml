@@ -7,3 +7,13 @@ dependencies = [
     "peewee>=4.5.2",
     "uvicorn>=0.54.0",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.1.1",
+]

@@ -1,16 +1,22 @@
 import asyncio
 import json
+import os
 import time
+from pathlib import Path
+from pprint import pprint
 from typing import AsyncGenerator
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 
+from app.core.config import DEFAULT_OUTPUT_DIR, REMAP_PATH
 from app.tasks.manager import TaskManager
 from app.utils.disk import get_disk_usage
 from app.utils.tasklog import log_path
+from pw_video_convert.cli import resolve_output
 
 from .deps import get_manager
+from .schemas import TaskCreate
 
 router = APIRouter()
 
@@ -27,16 +33,54 @@ async def list_tasks(mgr: TaskManager = Depends(get_manager)):
 
 @router.post("/tasks")
 async def create_task(
-    duration_sec: float = 10.0,
-    fail_at: int | None = None,
-    name: str = "test_job",
+    payload: TaskCreate,
     mgr: TaskManager = Depends(get_manager),
 ):
-    if duration_sec <= 0:
-        raise HTTPException(status_code=400, detail="duration_sec > 0")
-    if fail_at is not None and (fail_at < 5 or fail_at > 95):
-        raise HTTPException(status_code=400, detail="fail_at must be between 5 and 95")
-    uuid = await mgr.submit_test(duration_sec=duration_sec, fail_at=fail_at, name=name)
+    try:
+        input_path = Path(payload.input).expanduser().resolve()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"invalid input path: {exc}")
+    if payload.remap_path:
+        input_path = Path(str(input_path).replace(str(payload.remap_path), str(REMAP_PATH)))
+    if not input_path.is_file():
+        raise HTTPException(
+            status_code=400, detail=f"input file not found: {input_path}"
+        )
+    if payload.output is None:
+        output_arg = str(DEFAULT_OUTPUT_DIR)
+    else:
+        try:
+            cand = Path(payload.output).expanduser()
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"invalid output path: {exc}")
+        if cand.is_absolute():
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "output must be a relative path "
+                    "(resolved under the server output directory)"
+                ),
+            )
+        root = DEFAULT_OUTPUT_DIR.resolve()
+        try:
+            joined = (root / cand).resolve()
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400, detail=f"invalid output path: {exc}"
+            )
+        if not joined.is_relative_to(root):
+            raise HTTPException(
+                status_code=400, detail="output path escapes the output directory"
+            )
+        output_arg = str(joined) + (os.sep if payload.output.endswith(os.sep) else "")
+
+    output_path = resolve_output(input_path, output_arg, payload.quality, payload.container)
+    if output_path == input_path:
+        raise HTTPException(
+            status_code=400, detail="output path resolves to the input file"
+        )
+
+    uuid = await mgr.submit_convert(payload, input_path, output_path)
     return {"uuid": uuid, "status": "pending"}
 
 

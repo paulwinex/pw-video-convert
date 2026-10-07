@@ -1,64 +1,103 @@
+import io
 import multiprocessing as mp
+import sys
 import time
+from pathlib import Path
 from typing import Any, Dict
 
-from app.utils.tasklog import write_log
+import app.core.config  # noqa: F401  # installs pw-video-convert on sys.path
+from pw_video_convert import cli, probe
+
+from app.utils.tasklog import log_path, write_log
 
 
 def run_job(task_uuid: str, progress_q: mp.Queue, params: Dict[str, Any]) -> None:
     """Module-level entrypoint for mp.Process (must be picklable)."""
-    test_job(task_uuid=task_uuid, progress_q=progress_q, **params)
+    convert_job(task_uuid=task_uuid, progress_q=progress_q, **params)
 
 
-def test_job(
+def _put(progress_q: mp.Queue, task_uuid: str, **fields: Any) -> None:
+    progress_q.put({"task_uuid": task_uuid, "ts": time.time(), **fields})
+
+
+def _log(task_uuid: str, message: str) -> None:
+    try:
+        write_log(task_uuid, message)
+    except Exception:
+        pass
+
+
+def convert_job(
     task_uuid: str,
     progress_q: mp.Queue,
-    duration_sec: float = 12.0,
-    fail_at: int | None = None,
-):
-    """
-    Testing func
-    """
-    write_log(task_uuid, f"job started: duration_sec={duration_sec} fail_at={fail_at}")
+    input: str,
+    output: str,
+    quality: int,
+    container: str,
+    software: bool,
+) -> None:
+    file_input = Path(input)
+    output_path = Path(output)
     last_progress = 0
+    err_buf = io.StringIO()
+    old_stdout, old_stderr = sys.stdout, sys.stderr
+    log_file = None
+
     try:
-        steps = 20
-        total_sleep = max(0.01, duration_sec / steps)
-        for i in range(1, steps + 1):
-            p = int(i * 5)
-            if p > 95:
-                p = 95
-            last_progress = p
-            write_log(task_uuid, f"progress {p}%")
-            progress_q.put(
-                {
-                    "task_uuid": task_uuid,
-                    "status": "running",
-                    "progress": p,
-                    "ts": time.time(),
-                }
+        log_file = log_path(task_uuid).open("a", encoding="utf-8", buffering=1)
+        sys.stdout, sys.stderr = log_file, err_buf
+
+        if not file_input.is_file():
+            raise FileNotFoundError(f"input file not found: {file_input}")
+
+        use_hw = (not software) and probe.will_ha_work()
+        if not software and not use_hw:
+            print(
+                "Warning: hardware VAAPI AV1 unavailable, "
+                "falling back to software SVT-AV1"
             )
-            if fail_at is not None and p >= fail_at:
-                raise RuntimeError(f"Искусственная ошибка на прогрессе {p}%")
-            time.sleep(total_sleep)
-        write_log(task_uuid, f"job completed: result=ok:{task_uuid}")
-        progress_q.put(
-            {
-                "task_uuid": task_uuid,
-                "status": "completed",
-                "progress": 100,
-                "result": f"ok:{task_uuid}",
-                "ts": time.time(),
-            }
+
+        def on_progress(fraction: float, seconds_left: int | None) -> None:
+            nonlocal last_progress
+            last_progress = min(99, round(fraction * 100))
+            _put(progress_q, task_uuid, status="running", progress=last_progress)
+
+        code = cli.encode_once(
+            file_input,
+            output_path,
+            quality,
+            use_hw,
+            container,
+            progress_fn=on_progress,
+            cancel_fn=lambda: False,
         )
+
+        if code == 0:
+            _log(task_uuid, f"encode ok: {output_path}")
+            _put(
+                progress_q,
+                task_uuid,
+                status="completed",
+                progress=100,
+                result=str(output_path),
+            )
+        else:
+            error = (
+                err_buf.getvalue().replace("*** ENCODE ERROR ***\n", "").strip()
+                or f"encode failed (exit code {code})"
+            )
+            _log(task_uuid, f"encode failed: {error}")
+            _put(
+                progress_q,
+                task_uuid,
+                status="failed",
+                progress=last_progress,
+                error=error,
+            )
     except Exception as e:
-        write_log(task_uuid, f"job failed: {e}")
-        progress_q.put(
-            {
-                "task_uuid": task_uuid,
-                "status": "failed",
-                "progress": last_progress,
-                "error": str(e),
-                "ts": time.time(),
-            }
-        )
+        _log(task_uuid, f"job failed: {e}")
+        _put(progress_q, task_uuid, status="failed", progress=last_progress, error=str(e))
+    finally:
+        sys.stdout, sys.stderr = old_stdout, old_stderr
+        if log_file is not None:
+            log_file.close()

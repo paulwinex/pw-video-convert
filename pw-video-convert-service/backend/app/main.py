@@ -13,7 +13,6 @@ from app.models import Task
 from app.tasks.manager import manager
 
 logger = get_logger("main")
-
 if not FRONTEND_DIST.exists():
     raise RuntimeError("No frontend dist found")
 

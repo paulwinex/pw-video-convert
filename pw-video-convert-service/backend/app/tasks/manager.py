@@ -4,10 +4,12 @@ import json
 import multiprocessing as mp
 import uuid as uuid_mod
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from peewee import DoesNotExist
 
+from app.api.schemas import TaskCreate
 from app.core.db import db
 from app.core.log import get_logger
 from app.models.task import Task
@@ -58,17 +60,24 @@ class TaskManager:
                 self._proc = None
             self._running_uuid = None
 
-    async def submit_test(
+    async def submit_convert(
         self,
-        duration_sec: float = 10.0,
-        fail_at: int | None = None,
-        name: str = "test_job",
+        body: TaskCreate,
+        input_path: Path,
+        output_path: Path,
     ) -> str:
         job_uuid = uuid_mod.uuid4().hex
+        output_path = Path(output_path)
+        if not output_path.suffix:
+            output_path = output_path.with_name(input_path.name)
         params = {
-            "duration_sec": float(duration_sec),
-            "fail_at": fail_at if fail_at is None else int(fail_at),
+            "input": str(input_path),
+            "output": str(output_path),
+            "quality": body.quality,
+            "container": body.container,
+            "software": body.software,
         }
+        name = input_path.name
         spec = JobSpec(uuid=job_uuid, name=name, params=params)
 
         with db.atomic():
