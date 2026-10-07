@@ -74,21 +74,29 @@ export async function fetchTasks(): Promise<void> {
   tasks.value = (await res.json()) as Task[];
 }
 
-export async function createTask(
-  durationSec: number,
-  failAt: number | null
-): Promise<void> {
-  const params = new URLSearchParams();
-  params.set('duration_sec', String(durationSec));
-  if (failAt !== null && !Number.isNaN(failAt)) {
-    params.set('fail_at', String(failAt));
-  }
-  const res = await fetch(`/tasks?${params.toString()}`, { method: 'POST' });
+export interface TaskCreatePayload {
+  input: string;
+  output?: string;
+  quality?: number;
+  container?: 'mkv' | 'mp4';
+  software?: boolean;
+}
+
+export async function createTask(payload: TaskCreatePayload): Promise<void> {
+  const res = await fetch('/tasks', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
   if (!res.ok) {
     const body = (await res.json().catch(() => null)) as
       | { detail?: string }
       | null;
-    throw new Error(body?.detail ?? `POST /tasks: ${res.status}`);
+    throw new Error(
+      typeof body?.detail === 'string'
+        ? body.detail
+        : `POST /tasks: ${res.status}`
+    );
   }
 }
 

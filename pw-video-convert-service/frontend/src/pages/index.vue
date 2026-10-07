@@ -1,6 +1,6 @@
 <template>
   <q-layout view="hHh lpR fFf">
-    <q-header elevated class="bg-grey-4 text-dark">
+    <q-header class="bg-grey-9 text-white" >
       <q-toolbar>
         <q-toolbar-title>pwConvert</q-toolbar-title>
         <div class="text-caption q-mr-md">

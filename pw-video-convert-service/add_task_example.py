@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """
-WIP add task via API
+Create a video conversion task via API.
 
-Exmaple:
-    python3 add_task.py
-    python3 add_task.py --duration 30
-    python3 add_task.py --duration 15 --fail-at 40
+Example:
+    python3 add_task_example.py --input ~/video/in.mp4
+    python3 add_task_example.py --input ~/video/in.mp4 --quality 7 --container mp4 --software
 """
 
 import argparse
@@ -13,18 +12,19 @@ import json
 import os
 import sys
 import urllib.error
-import urllib.parse
 import urllib.request
 
-DEFAULT_BASE_URL = os.genenv('PW_CONV_HOST_URL') or "http://127.0.0.1:8000"
+DEFAULT_BASE_URL = os.getenv("PW_CONV_HOST_URL") or "http://127.0.0.1:8000"
 
 
-def add_task(base_url: str, duration: float, fail_at: int | None) -> dict:
-    params = {"duration_sec": str(duration)}
-    if fail_at is not None:
-        params["fail_at"] = str(fail_at)
-    url = f"{base_url}/tasks?{urllib.parse.urlencode(params)}"
-    req = urllib.request.Request(url, method="POST")
+def add_task(base_url: str, payload: dict) -> dict:
+    url = f"{base_url}/tasks"
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             return json.load(resp)
@@ -40,18 +40,37 @@ def add_task(base_url: str, duration: float, fail_at: int | None) -> dict:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Create a test task via API")
-    parser.add_argument("--duration", type=float, default=10.0, help="duration_sec (default: 10)")
-    parser.add_argument("--fail-at", type=int, default=None, help="fail on progress 5-95")
-    parser.add_argument("--url", default=DEFAULT_BASE_URL, help=f"API base url (default: {DEFAULT_BASE_URL})")
+    parser = argparse.ArgumentParser(
+        description="Create a video conversion task via API"
+    )
+    parser.add_argument("--input", required=True, help="source video file")
+    parser.add_argument(
+        "--output", default=None,
+        help="output dir or file, RELATIVE to the server output dir (default: the server output dir itself)",
+    )
+    parser.add_argument(
+        "--quality", type=int, default=5, help="quality 1-10 (default: 5)",
+    )
+    parser.add_argument("--container", choices=["mkv", "mp4"], default="mkv")
+    parser.add_argument(
+        "--software", action="store_true", help="force software SVT-AV1",
+    )
+    parser.add_argument(
+        "--url", default=DEFAULT_BASE_URL,
+        help=f"API base url (default: {DEFAULT_BASE_URL})",
+    )
     args = parser.parse_args()
 
-    if args.duration <= 0:
-        raise SystemExit("--duration must be > 0")
-    if args.fail_at is not None and not 5 <= args.fail_at <= 95:
-        raise SystemExit("--fail-at must be between 5 and 95")
+    payload: dict = {
+        "input": args.input,
+        "quality": args.quality,
+        "container": args.container,
+        "software": args.software,
+    }
+    if args.output is not None:
+        payload["output"] = args.output
 
-    result = add_task(args.url.rstrip("/"), args.duration, args.fail_at)
+    result = add_task(args.url.rstrip("/"), payload)
     print(f"created: uuid={result['uuid']} status={result['status']}")
 
 

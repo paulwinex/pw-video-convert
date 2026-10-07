@@ -4,35 +4,8 @@
       <div class="text-h6">Очередь задач</div>
       <q-space />
       <div>
-        <q-input
-          v-model.number="duration"
-          type="number"
-          label="duration_sec"
-          dense
-          outlined
-          :min="1"
-          style="width: 130px"
-        />
-      </div>
-      <div>
-        <q-input
-          v-model="failAt"
-          type="number"
-          label="fail_at (5-95)"
-          dense
-          outlined
-          clearable
-          style="width: 150px"
-        />
-      </div>
-      <div>
-        <q-btn
-          color="primary"
-          unelevated
-          label="Создать задачу"
-          :loading="creating"
-          @click="onCreate"
-        />
+        <!-- TODO: диалог создания задачи -->
+        <q-btn color="primary" unelevated label="Создать задачу" disable />
       </div>
       <div>
         <q-btn flat round icon="refresh" @click="onRefresh" />
@@ -157,7 +130,6 @@
 import { onMounted, ref } from 'vue';
 import { useQuasar, type QTableColumn } from 'quasar';
 import {
-  createTask,
   deleteTask,
   fetchLog,
   fetchTasks,
@@ -166,10 +138,6 @@ import {
 } from '@/services/tasks';
 
 const $q = useQuasar();
-
-const duration = ref(10);
-const failAt = ref<number | null>(null);
-const creating = ref(false);
 
 const logOpen = ref(false);
 const logUuid = ref('');
@@ -215,22 +183,6 @@ async function onRefresh(): Promise<void> {
     await fetchTasks();
   } catch (e) {
     $q.notify({ type: 'negative', message: String(e) });
-  }
-}
-
-async function onCreate(): Promise<void> {
-  creating.value = true;
-  try {
-    const fa =
-      failAt.value === null || Number.isNaN(Number(failAt.value))
-        ? null
-        : Number(failAt.value);
-    await createTask(duration.value, fa);
-    $q.notify({ type: 'positive', message: 'Задача создана' });
-  } catch (e) {
-    $q.notify({ type: 'negative', message: String(e) });
-  } finally {
-    creating.value = false;
   }
 }
 
