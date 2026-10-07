@@ -16,12 +16,12 @@ install-front:
 # запуск бэкенда с автоперезагрузкой
 [working-directory: 'backend']
 dev:
-	uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+	uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 --timeout-graceful-shutdown 3
 
 # запуск без reload
 [working-directory: 'backend']
 run:
-	uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
+	uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --timeout-graceful-shutdown 3
 
 # фронтенд dev-сервер
 [working-directory: 'frontend']
