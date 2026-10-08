@@ -46,11 +46,12 @@ async def create_task(
         raise HTTPException(
             status_code=400, detail=f"input file not found: {input_path}"
         )
-    if payload.output is None:
+    output_val = (payload.output or "").strip()
+    if not output_val:
         output_arg = str(DEFAULT_OUTPUT_DIR)
     else:
         try:
-            cand = Path(payload.output).expanduser()
+            cand = Path(output_val).expanduser()
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=f"invalid output path: {exc}")
         if cand.is_absolute():
@@ -72,9 +73,9 @@ async def create_task(
             raise HTTPException(
                 status_code=400, detail="output path escapes the output directory"
             )
-        output_arg = str(joined) + (os.sep if payload.output.endswith(os.sep) else "")
+        output_arg = str(joined) + os.sep
 
-    output_path = resolve_output(input_path, output_arg, payload.quality, payload.container)
+    output_path = resolve_output(input_path, output_arg, payload.container)
     if output_path == input_path:
         raise HTTPException(
             status_code=400, detail="output path resolves to the input file"

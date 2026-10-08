@@ -1,7 +1,9 @@
 import re
 import subprocess
 from tempfile import TemporaryFile
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple, Union
+
+from . import frame
 
 OPTIMAL_AUDIO_CODECS = {'aac', 'opus'}
 COPYABLE_SUB_CODECS = {'subrip', 'ass', 'webvtt'}
@@ -72,8 +74,11 @@ def build_encode_cmd(
     hw: bool,
     preset: Optional[str],
     container: str,
+    resolution: Optional[Union[str, List[int]]] = None,
 ) -> List[str]:
     video = info['video']
+    plan = frame.plan_video(video['width'], video['height'], resolution)
+    filters = list(plan['filters'])
 
     cmd = ['ffmpeg', '-y', '-progress', 'pipe:1']
     if hw:
@@ -81,13 +86,15 @@ def build_encode_cmd(
     cmd.extend(['-i', file_input])
 
     if hw:
-        cmd.extend(['-vf', _hw_vf(video['bit_depth'])])
+        cmd.extend(['-vf', ','.join(filters + [_hw_vf(video['bit_depth'])])])
         cmd.extend([
             '-c:v', 'av1_vaapi',
             '-rc_mode:v', 'CQP',
             '-global_quality:v', str(quality_value),
         ])
     else:
+        if filters:
+            cmd.extend(['-vf', ','.join(filters)])
         cmd.extend([
             '-c:v', 'libsvtav1',
             '-preset', preset,
@@ -196,9 +203,10 @@ def run_encode(
     container: str,
     output_fn: Callable[[float, Optional[int]], None],
     cancel_event: Callable[[], bool],
+    resolution: Optional[Union[str, List[int]]] = None,
 ) -> Optional[str]:
     cmd = build_encode_cmd(
-        file_input, file_output, info, quality_value, hw, preset, container
+        file_input, file_output, info, quality_value, hw, preset, container, resolution
     )
     _, error = get_progress(cmd, output_fn, info['frame_count'], cancel_event)
     return error

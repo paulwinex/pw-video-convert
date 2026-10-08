@@ -42,3 +42,27 @@ def test_encode_once_default_args_still_work(tiny_clip: Path, tmp_path: Path):
 
     assert code == 0
     assert out.is_file()
+
+
+def test_encode_once_resizes_to_requested_frame(tiny_clip: Path, tmp_path: Path):
+    from pw_video_convert import probe
+
+    out = tmp_path / "resized.mkv"
+    code = cli.encode_once(
+        tiny_clip, out, q=10, use_hw=False, container="mkv", resolution="128x128",
+    )
+
+    assert code == 0
+    video = probe.get_media_info(str(out))["video"]
+    assert (video["width"], video["height"]) == (128, 128)
+
+
+def test_encode_once_keeps_supported_source_size(tiny_clip: Path, tmp_path: Path):
+    from pw_video_convert import probe
+
+    out = tmp_path / "same.mkv"
+    code = cli.encode_once(tiny_clip, out, q=10, use_hw=False, container="mkv")
+
+    assert code == 0
+    video = probe.get_media_info(str(out))["video"]
+    assert (video["width"], video["height"]) == (320, 240)

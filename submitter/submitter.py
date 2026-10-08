@@ -7,7 +7,7 @@ import urllib.request
 
 from PyQt5.QtWidgets import (
     QApplication, QDialog, QVBoxLayout, QHBoxLayout, QLabel,
-    QListWidget, QSlider, QLineEdit, QPushButton, QFileDialog,
+    QListWidget, QSlider, QLineEdit, QPushButton, QFileDialog, QComboBox,
     QMessageBox
 )
 from PyQt5.QtCore import Qt
@@ -17,14 +17,14 @@ DEFAULT_BASE_URL = os.getenv("PW_CONV_HOST_URL") or "http://192.168.0.155:8000"
 
 DEFAULTS = {
     "quality": 5,
-    "output": "output",
+    "output": "",
 }
 
 
 def validate_output(text: str):
     text = text.strip()
     if not text:
-        return None, "Output is empty"
+        return "", None
     if text.startswith("~"):
         return None, "Output must not contain '~'"
     if os.path.isabs(text):
@@ -124,9 +124,23 @@ class ConvertDialog(QDialog):
         o_layout = QHBoxLayout()
         o_layout.addWidget(QLabel("Output:"))
         self.output_edit = QLineEdit(cfg["output"])
-        self.output_edit.setPlaceholderText("relative dir, e.g. output")
+        self.output_edit.setPlaceholderText("optional subfolder, leave empty for default")
         o_layout.addWidget(self.output_edit)
         layout.addLayout(o_layout)
+
+        # --- Resolution ---
+        r_layout = QHBoxLayout()
+        r_layout.addWidget(QLabel("Resolution:"))
+        self.resolution_combo = QComboBox()
+        for text, data in [
+            ("Original", None),
+            ("2K (2560x1440)", [2560, 1440]),
+            ("Full HD (1920x1080)", [1920, 1080]),
+            ("HD (1280x720)", [1280, 720]),
+        ]:
+            self.resolution_combo.addItem(text, data)
+        r_layout.addWidget(self.resolution_combo)
+        layout.addLayout(r_layout)
 
         # --- Submit ---
         self.submit_btn = QPushButton("Submit")
@@ -153,6 +167,9 @@ class ConvertDialog(QDialog):
                 "output": output,
                 "remap_path": "/mnt/NAS"
             }
+            resolution = self.resolution_combo.currentData()
+            if resolution is not None:
+                payload["resolution"] = resolution
             try:
                 result = add_task(base_url, payload)
                 print(

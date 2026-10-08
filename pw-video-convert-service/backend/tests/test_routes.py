@@ -59,16 +59,21 @@ def test_nonexistent_input_is_400(client, tmp_path):
     assert "input file not found" in r.json()["detail"]
 
 
-def test_output_equal_to_input_is_400(client, tmp_path, monkeypatch):
+def test_output_resolves_away_from_input_on_collision(
+    client, tmp_path, monkeypatch
+):
     root = tmp_path / "root"
     root.mkdir()
     monkeypatch.setattr(routes, "DEFAULT_OUTPUT_DIR", root)
-    src = root / "src.mp4"
+    src = root / "src.mkv"
     src.write_bytes(b"x")
 
-    r = client.post("/tasks", json={"input": str(src), "output": "src.mp4"})
-    assert r.status_code == 400
-    assert "input file" in r.json()["detail"]
+    r = client.post("/tasks", json={"input": str(src), "container": "mkv"})
+
+    assert r.status_code == 200
+    _, _, output_path = client.stub.calls[0]
+    assert output_path == (root / "src.out.mkv").resolve()
+    assert output_path != src.resolve()
 
 
 def test_create_resolves_default_output_dir(client, tmp_path):
@@ -114,6 +119,23 @@ def test_create_absolute_file_output_is_400(client, tmp_path):
     assert client.stub.calls == []
 
 
+def test_create_subfolder_output_without_slash_is_dir(
+    client, tmp_path, monkeypatch
+):
+    root = tmp_path / "root"
+    root.mkdir()
+    monkeypatch.setattr(routes, "DEFAULT_OUTPUT_DIR", root)
+    src = tmp_path / "src.mp4"
+    src.write_bytes(b"x")
+
+    r = client.post("/tasks", json={"input": str(src), "output": "subdir"})
+
+    assert r.status_code == 200
+    _, _, output_path = client.stub.calls[0]
+    assert output_path == (root / "subdir" / "src.mkv").resolve()
+    assert output_path.is_relative_to(root.resolve())
+
+
 def test_create_relative_output_lands_under_default_dir(
     client, tmp_path, monkeypatch
 ):
@@ -127,7 +149,7 @@ def test_create_relative_output_lands_under_default_dir(
 
     assert r.status_code == 200
     _, _, output_path = client.stub.calls[0]
-    assert output_path == (root / "subdir" / "custom.mkv").resolve()
+    assert output_path == (root / "subdir" / "custom.mkv" / "src.mkv").resolve()
     assert output_path.is_relative_to(root.resolve())
 
 
@@ -237,3 +259,34 @@ def test_null_byte_input_is_400(client, tmp_path):
 
     assert r.status_code == 400
     assert client.stub.calls == []
+
+
+def test_resolution_valid_is_accepted(client, tmp_path):
+    src = tmp_path / "src.mp4"
+    src.write_bytes(b"x")
+
+    r = client.post("/tasks", json={"input": str(src), "resolution": [1920, 1080]})
+
+    assert r.status_code == 200
+    body, _, _ = client.stub.calls[0]
+    assert body.resolution == [1920, 1080]
+
+
+@pytest.mark.parametrize("bad", [
+    "1920", "1920x1080", "abc", [1920], [1920, 1080, 720], [0, 1080],
+    [1920, -1], ["a", "b"], 1920,
+])
+def test_bad_resolution_is_422(client, bad):
+    r = client.post("/tasks", json={"input": "/tmp/x.mp4", "resolution": bad})
+    assert r.status_code == 422
+
+
+def test_resolution_defaults_to_none(client, tmp_path):
+    src = tmp_path / "src.mp4"
+    src.write_bytes(b"x")
+
+    r = client.post("/tasks", json={"input": str(src)})
+
+    assert r.status_code == 200
+    body, _, _ = client.stub.calls[0]
+    assert body.resolution is None

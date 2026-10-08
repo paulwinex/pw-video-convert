@@ -1,10 +1,10 @@
 from pathlib import Path
 
 
-def test_default_output_dir_is_video_output():
+def test_default_output_dir_is_home_convert():
     from app.core.config import DEFAULT_OUTPUT_DIR
 
-    assert DEFAULT_OUTPUT_DIR == Path("output")
+    assert DEFAULT_OUTPUT_DIR == Path("~/convert").expanduser()
     assert DEFAULT_OUTPUT_DIR.is_dir()
 
 

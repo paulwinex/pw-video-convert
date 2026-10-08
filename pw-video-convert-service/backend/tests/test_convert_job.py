@@ -113,3 +113,42 @@ def test_convert_job_reports_failure_even_if_log_write_fails(
     assert len(msgs) == 1
     assert msgs[0]["status"] == "failed"
     assert "input file not found" in msgs[0]["error"]
+
+
+def test_convert_job_forwards_resolution(tmp_path, monkeypatch, drain):
+    import pw_video_convert.cli as cli_module
+
+    uuid = "test-convert-resolution"
+    src = tmp_path / "src.mkv"
+    src.write_bytes(b"x")
+    out = tmp_path / "resized" / "tiny.mkv"
+    q: mp.Queue = mp.Queue()
+    seen = {}
+
+    def fake_encode_once(file_input, output_path, q_, use_hw, container,
+                         progress_fn=None, cancel_fn=None, resolution=None):
+        seen["resolution"] = resolution
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(output_path).write_bytes(b"x")
+        progress_fn(1.0, None)
+        return 0
+
+    monkeypatch.setattr(cli_module, "encode_once", fake_encode_once)
+
+    try:
+        convert_job(
+            task_uuid=uuid,
+            progress_q=q,
+            input=str(src),
+            output=str(out),
+            quality=5,
+            container="mkv",
+            software=True,
+            resolution=[1280, 720],
+        )
+        msgs = drain(q)
+    finally:
+        remove_log(uuid)
+
+    assert seen["resolution"] == [1280, 720]
+    assert msgs[-1]["status"] == "completed"

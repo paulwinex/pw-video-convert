@@ -68,14 +68,13 @@ class TaskManager:
     ) -> str:
         job_uuid = uuid_mod.uuid4().hex
         output_path = Path(output_path)
-        if not output_path.suffix:
-            output_path = output_path.with_name(input_path.name)
         params = {
             "input": str(input_path),
             "output": str(output_path),
             "quality": body.quality,
             "container": body.container,
             "software": body.software,
+            "resolution": body.resolution,
         }
         name = input_path.name
         spec = JobSpec(uuid=job_uuid, name=name, params=params)

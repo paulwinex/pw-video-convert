@@ -8,11 +8,12 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple, Union
 
 from . import probe
 from . import quality
 from . import encode
+from . import frame
 
 
 CANCELLED = False
@@ -55,7 +56,7 @@ def make_progress_printer():
     return print_progress
 
 
-def resolve_output(file_input: Path, output_arg: Optional[str], q: int, container: str) -> Path:
+def resolve_output(file_input: Path, output_arg: Optional[str], container: str) -> Path:
     ext = 'mkv' if container == 'mkv' else 'mp4'
 
     if output_arg is None:
@@ -68,10 +69,18 @@ def resolve_output(file_input: Path, output_arg: Optional[str], q: int, containe
             return candidate.resolve()
 
     stem = file_input.stem
-    same_dir = target_dir.resolve() == file_input.parent.resolve()
+    source = file_input.resolve()
+    path = (target_dir / f'{stem}.{ext}').resolve()
+    if path != source:
+        return path
 
-    name = f'{stem}.q{q}.av1.{ext}' if same_dir else f'{stem}.{ext}'
-    return (target_dir / name).resolve()
+    suffix = 1
+    while True:
+        name = f'{stem}.out{"" if suffix == 1 else suffix}.{ext}'
+        path = (target_dir / name).resolve()
+        if path != source:
+            return path
+        suffix += 1
 
 
 def fmt_size(size_bytes: int) -> str:
@@ -93,11 +102,18 @@ def encoder_for(q: int, use_hw: bool) -> Tuple[int, Optional[str], str]:
         f'libsvtav1 preset {preset} crf {quality.crf_for_quality(q)} (software)'
 
 
-def print_plan(info: dict, encoder_name: str, container: str) -> None:
+def print_plan(info: dict, encoder_name: str, container: str,
+               resolution: Optional[Union[str, List[int]]] = None) -> None:
     print(f'Input: {info["source"]} ({fmt_size(info["size"])})')
     video = info['video']
     print(f'Source: {video["width"]}x{video["height"]}, {video["bit_depth"]}-bit'
           + (', HDR metadata present' if video['hdr'] else ''))
+    plan = frame.plan_video(video['width'], video['height'], resolution)
+    if plan['final'] != plan['source']:
+        box_note = (f' (target {plan["box"][0]}x{plan["box"][1]})'
+                    if plan['box'] != plan['source'] else '')
+        print(f'Frame: {plan["source"][0]}x{plan["source"][1]} -> '
+              f'{plan["final"][0]}x{plan["final"][1]} aligned for AV1{box_note}')
     print(f'Encoder: {encoder_name}')
 
     audio_plan = encode.build_audio_plan(info)
@@ -121,7 +137,8 @@ def print_plan(info: dict, encoder_name: str, container: str) -> None:
 def encode_once(file_input: Path, output_path: Path, q: int,
                 use_hw: bool, container: str,
                 progress_fn: Optional[Callable[[float, Optional[int]], None]] = None,
-                cancel_fn: Optional[Callable[[], bool]] = None) -> int:
+                cancel_fn: Optional[Callable[[], bool]] = None,
+                resolution: Optional[Union[str, List[int]]] = None) -> int:
     info = probe.get_media_info(str(file_input))
     info['source'] = str(file_input)
     source_size = info['size']
@@ -129,7 +146,7 @@ def encode_once(file_input: Path, output_path: Path, q: int,
     quality_value, preset, encoder_name = encoder_for(q, use_hw)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    print_plan(info, encoder_name, container)
+    print_plan(info, encoder_name, container, resolution)
 
     on_progress = progress_fn if progress_fn is not None else make_progress_printer()
     is_cancelled = cancel_fn if cancel_fn is not None else (lambda: CANCELLED)
@@ -140,6 +157,7 @@ def encode_once(file_input: Path, output_path: Path, q: int,
     error = encode.run_encode(
         str(file_input), str(output_path), info, quality_value,
         use_hw, preset, container, on_progress, is_cancelled,
+        resolution=resolution,
     )
 
     print()
@@ -196,7 +214,8 @@ def run_test(file_input: Path, args, use_hw: bool) -> int:
                 return 130
             out = target_dir / f'{file_input.stem}.q{q}.{ext}'
             print(f'\n=== q{q} ===')
-            code = encode_once(Path(seg_path), out, q, use_hw, args.container)
+            code = encode_once(Path(seg_path), out, q, use_hw, args.container,
+                               resolution=args.resolution)
             if code != 0:
                 overall = code
                 break
@@ -214,8 +233,10 @@ def main() -> int:
         description=(
             'Re-encode video to AV1 with a quality scale q=1..10. '
             'q=10 is near-transparent (film grain preserved); lower levels trade '
-            'quality for size. Resolution, framerate, all audio tracks and subtitles '
-            'are preserved. Audio in non-optimal codecs is re-encoded to Opus at '
+            'quality for size. Framerate, all audio tracks and subtitles are '
+            'preserved. Resolution is kept unless --resolution is given, and the '
+            'frame is always aligned to an AV1-supported size with centered black '
+            'bars. Audio in non-optimal codecs is re-encoded to Opus at '
             'high quality without loudness change.'
         ),
     )
@@ -231,12 +252,23 @@ def main() -> int:
     parser.add_argument('-t', dest='test', action='store_true',
                         help='Test mode: cut 1 minute from the middle and encode '
                              'samples at q=1,3,5,7,9 into the output directory.')
+    parser.add_argument('-r', '--resolution', type=str, default=None, metavar='WxH',
+                        help='Target frame size, e.g. 1920x1080. The source is fitted '
+                             'into it without upscaling and centered with black bars; '
+                             'the result is always aligned to an AV1-supported size')
     parser.add_argument('input', type=str, help='Source video file')
     parser.add_argument('output', nargs='?', default=None,
-                        help='Target directory or output file path. '
-                             'If it matches the source directory, a .qN.av1 suffix is added.')
+                        help='Target directory or output file path. The output keeps '
+                             'the input name with the container extension; an .out '
+                             'suffix is added if it would overwrite the input.')
 
     args = parser.parse_args()
+
+    if args.resolution:
+        try:
+            frame.parse_resolution(args.resolution)
+        except ValueError as exc:
+            parser.error(str(exc))
 
     file_input = Path(args.input).expanduser().resolve()
     if not file_input.is_file():
@@ -256,12 +288,13 @@ def main() -> int:
     if args.test:
         return run_test(file_input, args, use_hw)
 
-    output_path = resolve_output(file_input, args.output, args.quality, args.container)
+    output_path = resolve_output(file_input, args.output, args.container)
     if output_path == file_input:
         print('Error: output path resolves to the input file', file=sys.stderr)
         return 1
 
-    return encode_once(file_input, output_path, args.quality, use_hw, args.container)
+    return encode_once(file_input, output_path, args.quality, use_hw, args.container,
+                       resolution=args.resolution)
 
 
 if __name__ == '__main__':

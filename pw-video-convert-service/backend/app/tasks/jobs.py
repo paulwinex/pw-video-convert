@@ -35,6 +35,7 @@ def convert_job(
     quality: int,
     container: str,
     software: bool,
+    resolution: list[int] | None = None,
 ) -> None:
     file_input = Path(input)
     output_path = Path(output)
@@ -70,6 +71,7 @@ def convert_job(
             container,
             progress_fn=on_progress,
             cancel_fn=lambda: False,
+            resolution=resolution,
         )
 
         if code == 0:

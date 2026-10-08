@@ -46,7 +46,8 @@ def main() -> None:
     parser.add_argument("--input", required=True, help="source video file")
     parser.add_argument(
         "--output", default=None,
-        help="output dir or file, RELATIVE to the server output dir (default: the server output dir itself)",
+        help="output subfolder, RELATIVE to the server output dir "
+             "(default: the server output dir itself)",
     )
     parser.add_argument(
         "--quality", type=int, default=5, help="quality 1-10 (default: 5)",
