@@ -80,6 +80,8 @@ export interface TaskCreatePayload {
   quality?: number;
   container?: 'mkv' | 'mp4';
   software?: boolean;
+  resolution?: [number, number];
+  remap_path?: string | null;
 }
 
 export async function createTask(payload: TaskCreatePayload): Promise<void> {

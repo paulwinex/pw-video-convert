@@ -4,8 +4,7 @@
       <div class="text-h6">Очередь задач</div>
       <q-space />
       <div>
-        <!-- TODO: диалог создания задачи -->
-        <q-btn color="primary" unelevated label="Создать задачу" disable />
+        <q-btn color="primary" unelevated label="Создать задачу" @click="createDialog = true" />
       </div>
       <div>
         <q-btn flat round icon="refresh" @click="onRefresh" />
@@ -123,13 +122,19 @@
         <q-inner-loading :showing="logLoading" />
       </q-card>
     </q-dialog>
+
+    <CreateTaskDialog v-model="createDialog" @submit="handleCreateSubmit" ref="createDialogRef" />
+
+
   </q-page>
 </template>
 
 <script setup lang="ts">
 import { onMounted, ref } from 'vue';
 import { useQuasar, type QTableColumn } from 'quasar';
+import CreateTaskDialog from '@/components/CreateTaskDialog.vue';
 import {
+  createTask,
   deleteTask,
   fetchLog,
   fetchTasks,
@@ -143,6 +148,9 @@ const logOpen = ref(false);
 const logUuid = ref('');
 const logText = ref('');
 const logLoading = ref(false);
+
+const createDialog = ref(false);
+const createDialogRef = ref<any>(null);
 
 const columns: QTableColumn<Task>[] = [
   { name: 'name', label: 'Name', field: 'name', align: 'left' },
@@ -213,6 +221,21 @@ async function loadLog(): Promise<void> {
     logOpen.value = false;
   } finally {
     logLoading.value = false;
+  }
+}
+
+async function handleCreateSubmit(payloads: any[]): Promise<void> {
+  try {
+    for (const payload of payloads) {
+      await createTask(payload);
+    }
+    await fetchTasks();
+    createDialog.value = false;
+    createDialogRef.value?.reset();
+    $q.notify({ type: 'positive', message: 'Задачи созданы' });
+  } catch (e) {
+    createDialogRef.value?.setLoading(false);
+    $q.notify({ type: 'negative', message: String(e) });
   }
 }
 
