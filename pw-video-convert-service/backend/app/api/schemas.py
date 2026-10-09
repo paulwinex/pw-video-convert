@@ -1,4 +1,5 @@
-from typing import Literal
+from datetime import datetime
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -18,3 +19,17 @@ class TaskCreate(BaseModel):
         if value is not None and not all(n > 0 for n in value):
             raise ValueError("resolution sizes must be positive")
         return value
+
+
+class FileEntry(BaseModel):
+    name: str
+    path: str
+    is_dir: bool
+    size: Optional[int] = None
+    created: Optional[datetime] = None
+    modified: Optional[datetime] = None
+
+
+class ListResponse(BaseModel):
+    path: str
+    entries: list[FileEntry]

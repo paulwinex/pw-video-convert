@@ -290,3 +290,47 @@ def test_resolution_defaults_to_none(client, tmp_path):
     assert r.status_code == 200
     body, _, _ = client.stub.calls[0]
     assert body.resolution is None
+
+
+def test_relative_input_resolves_under_user_root(client, tmp_path, monkeypatch):
+    root = tmp_path / "root"
+    (root / "sub").mkdir(parents=True)
+    src = root / "sub" / "clip.mp4"
+    src.write_bytes(b"x")
+    monkeypatch.setattr(routes.filesystem, "get_user_root", lambda: root)
+
+    r = client.post("/tasks", json={"input": "sub/clip.mp4"})
+
+    assert r.status_code == 200
+    _, input_path, _ = client.stub.calls[0]
+    assert input_path == src.resolve()
+
+
+def test_absolute_input_is_not_prefixed_with_user_root(
+    client, tmp_path, monkeypatch
+):
+    root = tmp_path / "root"
+    root.mkdir()
+    src = tmp_path / "abs.mp4"
+    src.write_bytes(b"x")
+    monkeypatch.setattr(routes.filesystem, "get_user_root", lambda: root)
+
+    r = client.post("/tasks", json={"input": str(src)})
+
+    assert r.status_code == 200
+    _, input_path, _ = client.stub.calls[0]
+    assert input_path == src.resolve()
+
+
+def test_relative_input_missing_under_user_root_is_400(
+    client, tmp_path, monkeypatch
+):
+    root = tmp_path / "root"
+    root.mkdir()
+    monkeypatch.setattr(routes.filesystem, "get_user_root", lambda: root)
+
+    r = client.post("/tasks", json={"input": "sub/nope.mp4"})
+
+    assert r.status_code == 400
+    assert "input file not found" in r.json()["detail"]
+    assert client.stub.calls == []

@@ -83,6 +83,10 @@ export default defineConfig((/* ctx */) => {
         '/system': {
           target: 'http://127.0.0.1:8000',
           changeOrigin: true
+        },
+        '/fs': {
+          target: 'http://127.0.0.1:8000',
+          changeOrigin: true
         }
       }
     },

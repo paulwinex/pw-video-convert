@@ -10,6 +10,7 @@ from app.core.config import FRONTEND_DIST
 from app.core.db import init_db
 from app.core.log import get_logger
 from app.models import Task
+from app.tasks import filesystem
 from app.tasks.manager import manager
 
 logger = get_logger("main")
@@ -19,6 +20,7 @@ if not FRONTEND_DIST.exists():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    print('USER ROOT:', filesystem.get_user_root())
     logger.info("init db...")
     init_db([Task])
     logger.info("start task manager...")
