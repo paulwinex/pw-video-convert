@@ -19,7 +19,7 @@ ServiceTypes=KonqPopupMenu/Plugin
 MimeType=video/*;
 Actions=showVideoPathDialog
 X-KDE-Priority=TopLevel
-Terminal=true
+Terminal=false
 
 [Desktop Action showVideoPathDialog]
 Name=Convert Video

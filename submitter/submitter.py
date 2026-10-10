@@ -17,7 +17,6 @@ DEFAULT_BASE_URL = os.getenv("PW_CONV_HOST_URL") or "http://192.168.0.155:8000"
 
 DEFAULTS = {
     "quality": 5,
-    "output": "",
 }
 
 
@@ -44,11 +43,6 @@ def load_config():
         if isinstance(data, dict):
             if isinstance(data.get("quality"), int):
                 cfg["quality"] = max(1, min(10, data["quality"]))
-            out = data.get("output")
-            if isinstance(out, str):
-                normalized, _ = validate_output(out)
-                if normalized is not None:
-                    cfg["output"] = normalized
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         pass
     return cfg
@@ -123,7 +117,7 @@ class ConvertDialog(QDialog):
         # --- Output ---
         o_layout = QHBoxLayout()
         o_layout.addWidget(QLabel("Output:"))
-        self.output_edit = QLineEdit(cfg["output"])
+        self.output_edit = QLineEdit()
         self.output_edit.setPlaceholderText("optional subfolder, leave empty for default")
         o_layout.addWidget(self.output_edit)
         layout.addLayout(o_layout)
@@ -155,7 +149,7 @@ class ConvertDialog(QDialog):
         if err is not None:
             QMessageBox.warning(self, "Invalid output", err)
             return
-        save_config({"quality": quality, "output": output})
+        save_config({"quality": quality})
 
         base_url = DEFAULT_BASE_URL.rstrip("/")
         errors = []
