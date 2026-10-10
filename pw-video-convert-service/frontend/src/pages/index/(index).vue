@@ -84,6 +84,7 @@
     <q-table
       flat
       bordered
+      dense
       :rows="filteredTasks"
       :columns="columns"
       row-key="uuid"
@@ -110,14 +111,19 @@
       </template>
 
       <template #body-cell-progress="props">
-        <q-td :props="props" style="width: 200px">
-          <q-linear-progress
-            :value="props.row.progress / 100"
-            :color="progressColor(props.row.status)"
-            rounded
-            size="16px"
-          />
-          <div class="text-caption">{{ props.row.progress }}%</div>
+        <q-td :props="props" style="width: 180px">
+          <div class="row items-center no-wrap q-gutter-xs">
+            <q-linear-progress
+              :value="props.row.progress / 100"
+              :color="progressColor(props.row.status)"
+              rounded
+              size="12px"
+              class="col"
+            />
+            <div class="text-caption" style="width: 42px; text-align: right">
+              {{ props.row.progress }}%
+            </div>
+          </div>
         </q-td>
       </template>
 
@@ -136,6 +142,7 @@
             flat
             dense
             round
+            size="sm"
             icon="pause"
             @click="onPause(props.row.uuid)"
           >
@@ -146,6 +153,7 @@
             flat
             dense
             round
+            size="sm"
             icon="stop"
             color="orange"
             @click="askStop(props.row)"
@@ -157,6 +165,7 @@
             flat
             dense
             round
+            size="sm"
             icon="play_arrow"
             color="primary"
             @click="onStart(props.row.uuid)"
@@ -167,6 +176,7 @@
             flat
             dense
             round
+            size="sm"
             icon="subject"
             :disable="!props.row.has_log"
             @click="onShowLog(props.row.uuid)"
@@ -179,6 +189,7 @@
             flat
             dense
             round
+            size="sm"
             icon="delete"
             color="negative"
             :disable="props.row.status === 'running'"
@@ -321,10 +332,10 @@ import {
 
 const $q = useQuasar();
 
-const filter = ref('');
+const filter = ref<string | null>('');
 
 const filteredTasks = computed(() => {
-  const q = filter.value.trim().toLowerCase();
+  const q = (filter.value ?? '').trim().toLowerCase();
   if (!q) return tasks.value;
   return tasks.value.filter((t) => t.name.toLowerCase().includes(q));
 });
