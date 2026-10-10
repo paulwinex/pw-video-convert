@@ -12,26 +12,30 @@ def _input(tmp_path, name='video.mkv'):
     return path.resolve()
 
 
-def test_output_next_to_source_keeps_stem_and_container_ext(tmp_path):
+def test_output_next_to_source_appends_codec_suffix(tmp_path):
     src = _input(tmp_path, 'video.mp4')
-    assert cli.resolve_output(src, None, 'mkv') == (tmp_path / 'video.mkv').resolve()
+    assert cli.resolve_output(src, None, 'mkv') == (tmp_path / 'video.av1.mkv').resolve()
 
 
-def test_output_collision_gets_out_suffix(tmp_path):
+def test_codec_suffix_can_be_disabled(tmp_path):
+    src = _input(tmp_path, 'video.mp4')
+    assert cli.resolve_output(
+        src, None, 'mkv', add_codec_name_suffix=False
+    ) == (tmp_path / 'video.mkv').resolve()
+
+
+def test_output_collision_with_suffix_disabled_gets_out_suffix(tmp_path):
     src = _input(tmp_path, 'video.mkv')
-    assert cli.resolve_output(src, None, 'mkv') == (tmp_path / 'video.out.mkv').resolve()
+    assert cli.resolve_output(
+        src, None, 'mkv', add_codec_name_suffix=False
+    ) == (tmp_path / 'video.out.mkv').resolve()
 
 
-def test_output_collision_on_suffixed_name_gets_next_suffix(tmp_path):
-    src = _input(tmp_path, 'video.out.mkv')
-    assert cli.resolve_output(src, None, 'mkv') == (tmp_path / 'video.out.out.mkv').resolve()
-
-
-def test_output_dir_keeps_stem(tmp_path):
+def test_output_dir_keeps_stem_and_appends_codec(tmp_path):
     src = _input(tmp_path, 'video.mp4')
     out_dir = tmp_path / 'outdir'
     out_dir.mkdir()
-    assert cli.resolve_output(src, str(out_dir), 'mkv') == (out_dir / 'video.mkv').resolve()
+    assert cli.resolve_output(src, str(out_dir), 'mkv') == (out_dir / 'video.av1.mkv').resolve()
 
 
 def test_explicit_output_file_is_used_as_is(tmp_path):

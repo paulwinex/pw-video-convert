@@ -104,7 +104,7 @@ def test_output_resolves_away_from_input_on_collision(
 
     assert r.status_code == 200
     _, _, output_path = client.stub.calls[0]
-    assert output_path == (root / "src.out.mkv").resolve()
+    assert output_path == (root / "src.av1.mkv").resolve()
     assert output_path != src.resolve()
 
 
@@ -121,8 +121,8 @@ def test_create_resolves_default_output_dir(client, tmp_path):
     assert r.json() == {"uuid": "stub-uuid", "status": "pending"}
     body, input_path, output_path = client.stub.calls[0]
     assert input_path == src.resolve()
-    # different dir than source -> <stem>.<ext>, no .qN.av1 suffix
-    assert output_path == (DEFAULT_OUTPUT_DIR / "src.mp4").resolve()
+    # different dir than source -> <stem>.av1.<ext>
+    assert output_path == (DEFAULT_OUTPUT_DIR / "src.av1.mp4").resolve()
     assert body.quality == 7 and body.container == "mp4" and body.software is True
 
 
@@ -164,7 +164,7 @@ def test_create_subfolder_output_without_slash_is_dir(
 
     assert r.status_code == 200
     _, _, output_path = client.stub.calls[0]
-    assert output_path == (root / "subdir" / "src.mkv").resolve()
+    assert output_path == (root / "subdir" / "src.av1.mkv").resolve()
     assert output_path.is_relative_to(root.resolve())
 
 
@@ -181,7 +181,7 @@ def test_create_relative_output_lands_under_default_dir(
 
     assert r.status_code == 200
     _, _, output_path = client.stub.calls[0]
-    assert output_path == (root / "subdir" / "custom.mkv" / "src.mkv").resolve()
+    assert output_path == (root / "subdir" / "custom.mkv" / "src.av1.mkv").resolve()
     assert output_path.is_relative_to(root.resolve())
 
 
@@ -198,7 +198,7 @@ def test_create_relative_output_dir_with_trailing_sep(
 
     assert r.status_code == 200
     _, _, output_path = client.stub.calls[0]
-    assert output_path == (root / "subdir" / "src.mkv").resolve()
+    assert output_path == (root / "subdir" / "src.av1.mkv").resolve()
     assert output_path.is_relative_to(root.resolve())
 
 
@@ -213,7 +213,7 @@ def test_empty_output_resolves_to_root_dir(client, tmp_path, monkeypatch):
 
     assert r.status_code == 200
     _, _, output_path = client.stub.calls[0]
-    assert output_path == (root / "src.mkv").resolve()
+    assert output_path == (root / "src.av1.mkv").resolve()
     assert output_path.is_relative_to(root.resolve())
 
 
