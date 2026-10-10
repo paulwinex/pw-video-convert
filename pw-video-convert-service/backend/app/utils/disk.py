@@ -1,5 +1,14 @@
 import asyncio
 import shutil
+from pathlib import Path
+
+
+def file_size(path: str) -> int | None:
+    try:
+        p = Path(path)
+        return p.stat().st_size if p.is_file() else None
+    except OSError:
+        return None
 
 
 def _disk_usage(path: str = "/"):

@@ -66,3 +66,20 @@ def test_encode_once_keeps_supported_source_size(tiny_clip: Path, tmp_path: Path
     assert code == 0
     video = probe.get_media_info(str(out))["video"]
     assert (video["width"], video["height"]) == (320, 240)
+
+
+def test_encode_once_reports_executed_command(
+    tiny_clip: Path, tmp_path: Path, capsys
+):
+    out = tmp_path / "cmd.mkv"
+
+    code = cli.encode_once(
+        tiny_clip, out, q=10, use_hw=False, container="mkv",
+        progress_fn=lambda fraction, seconds_left: None,
+    )
+
+    captured = capsys.readouterr()
+    assert code == 0
+    assert "ffmpeg" in captured.out
+    assert str(tiny_clip) in captured.out
+    assert str(out) in captured.out

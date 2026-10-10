@@ -11,6 +11,7 @@ from peewee import (
 )
 
 from app.core.db import db
+from app.utils.disk import file_size
 from app.utils.tasklog import has_log
 
 
@@ -24,8 +25,10 @@ class Task(Model):
         choices=[
             ("pending", "pending"),
             ("running", "running"),
+            ("paused", "paused"),
             ("completed", "completed"),
             ("failed", "failed"),
+            ("canceled", "canceled"),
         ],
     )
     progress = IntegerField(default=0)
@@ -41,6 +44,8 @@ class Task(Model):
         table_name = "tasks"
 
     def to_dict(self) -> dict:
+        params = json.loads(self.params) if self.params else {}
+        input_path = params.get("input")
         return {
             "id": self.id,
             "uuid": self.uuid,
@@ -49,7 +54,9 @@ class Task(Model):
             "progress": int(self.progress or 0),
             "error": self.error,
             "result": self.result,
-            "params": json.loads(self.params) if self.params else {},
+            "params": params,
+            "size_before": file_size(input_path) if input_path else None,
+            "size_after": file_size(self.result) if self.result else None,
             "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
             "started_at": self.started_at.isoformat() + "Z" if self.started_at else None,
             "finished_at": self.finished_at.isoformat() + "Z" if self.finished_at else None,

@@ -96,13 +96,83 @@ async def create_task(
     return {"uuid": uuid, "status": "pending"}
 
 
+@router.post("/tasks/pause-unstarted")
+async def pause_unstarted(mgr: TaskManager = Depends(get_manager)):
+    count = await mgr.pause_pending()
+    return {"count": count}
+
+
+@router.delete("/tasks/completed")
+async def delete_completed(
+    with_result: bool = False,
+    mgr: TaskManager = Depends(get_manager),
+):
+    count = await mgr.delete_by_status(("completed",), with_result=with_result)
+    return {"count": count}
+
+
+@router.delete("/tasks/failed")
+async def delete_failed(
+    with_result: bool = False,
+    mgr: TaskManager = Depends(get_manager),
+):
+    count = await mgr.delete_by_status(("failed",), with_result=with_result)
+    return {"count": count}
+
+
 @router.delete("/tasks/{task_uuid}")
-async def delete_task(task_uuid: str, mgr: TaskManager = Depends(get_manager)):
-    ok = await mgr.delete_task(task_uuid)
+async def delete_task(
+    task_uuid: str,
+    with_result: bool = False,
+    mgr: TaskManager = Depends(get_manager),
+):
+    ok = await mgr.delete_task(task_uuid, with_result=with_result)
     if not ok:
         raise HTTPException(
             status_code=409,
             detail="cannot delete: not found or currently running",
+        )
+    return {"ok": True}
+
+
+@router.post("/tasks/{task_uuid}/pause")
+async def pause_task(
+    task_uuid: str,
+    mgr: TaskManager = Depends(get_manager),
+):
+    ok = await mgr.pause_task(task_uuid)
+    if not ok:
+        raise HTTPException(
+            status_code=409,
+            detail="cannot pause: not found or not pending",
+        )
+    return {"ok": True}
+
+
+@router.post("/tasks/{task_uuid}/start")
+async def start_task(
+    task_uuid: str,
+    mgr: TaskManager = Depends(get_manager),
+):
+    ok = await mgr.start_task(task_uuid)
+    if not ok:
+        raise HTTPException(
+            status_code=409,
+            detail="cannot start: not found or not paused/canceled",
+        )
+    return {"ok": True}
+
+
+@router.post("/tasks/{task_uuid}/stop")
+async def stop_task(
+    task_uuid: str,
+    mgr: TaskManager = Depends(get_manager),
+):
+    ok = await mgr.stop_task(task_uuid)
+    if not ok:
+        raise HTTPException(
+            status_code=409,
+            detail="cannot stop: not found or not running",
         )
     return {"ok": True}
 

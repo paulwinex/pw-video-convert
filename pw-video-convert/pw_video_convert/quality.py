@@ -9,12 +9,12 @@ SVT_CRF_BY_Q: Dict[int, int] = {
     9: 16,
     8: 18,
     7: 20,
-    6: 22,
-    5: 24,
-    4: 26,
-    3: 28,
-    2: 31,
-    1: 34,
+    6: 23,
+    5: 26,
+    4: 29,
+    3: 34,
+    2: 39,
+    1: 44,
 }
 
 SVT_PRESET_BY_Q: Dict[int, str] = {
@@ -30,17 +30,16 @@ SVT_PRESET_BY_Q: Dict[int, str] = {
     1: '10',
 }
 
+# VAAPI AV1 exposes its quantizer as AV1 base_q_idx, which spans 0..255,
+# unlike H.264/HEVC (0..51). Map it from the software CRF scale, where one
+# CRF step is roughly four qindex steps, so both encoders stay aligned and
+# low quality values actually get aggressive.
+VAAPI_QP_PER_CRF = 4
+VAAPI_QP_MAX = 255
+
 VAAPI_GLOBAL_QUALITY_BY_Q: Dict[int, int] = {
-    10: 33,
-    9: 35,
-    8: 38,
-    7: 40,
-    6: 42,
-    5: 44,
-    4: 46,
-    3: 48,
-    2: 50,
-    1: 52,
+    q: min(crf * VAAPI_QP_PER_CRF, VAAPI_QP_MAX)
+    for q, crf in SVT_CRF_BY_Q.items()
 }
 
 

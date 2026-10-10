@@ -13,6 +13,17 @@ from app.core.config import DEFAULT_OUTPUT_DIR
 class StubManager:
     def __init__(self):
         self.calls = []
+        self.delete_calls = []
+        self.pause_calls = []
+        self.start_calls = []
+        self.stop_calls = []
+        self.pause_pending_calls = 0
+        self.bulk_delete_calls = []
+        self.pause_result = True
+        self.start_result = True
+        self.stop_result = True
+        self.pause_pending_result = 0
+        self.bulk_delete_result = 0
 
     async def submit_convert(self, body, input_path: Path, output_path: Path) -> str:
         self.calls.append((body, input_path, output_path))
@@ -21,8 +32,29 @@ class StubManager:
     async def list_tasks(self):
         return []
 
-    async def delete_task(self, task_uuid: str) -> bool:
+    async def delete_task(self, task_uuid: str, with_result: bool = False) -> bool:
+        self.delete_calls.append((task_uuid, with_result))
         return True
+
+    async def pause_task(self, task_uuid: str) -> bool:
+        self.pause_calls.append(task_uuid)
+        return self.pause_result
+
+    async def start_task(self, task_uuid: str) -> bool:
+        self.start_calls.append(task_uuid)
+        return self.start_result
+
+    async def stop_task(self, task_uuid: str) -> bool:
+        self.stop_calls.append(task_uuid)
+        return self.stop_result
+
+    async def pause_pending(self) -> int:
+        self.pause_pending_calls += 1
+        return self.pause_pending_result
+
+    async def delete_by_status(self, statuses, with_result: bool = False) -> int:
+        self.bulk_delete_calls.append((tuple(statuses), with_result))
+        return self.bulk_delete_result
 
 
 @pytest.fixture
@@ -334,3 +366,96 @@ def test_relative_input_missing_under_user_root_is_400(
     assert r.status_code == 400
     assert "input file not found" in r.json()["detail"]
     assert client.stub.calls == []
+
+
+def test_delete_defaults_to_keeping_result(client):
+    r = client.delete("/tasks/abc")
+
+    assert r.status_code == 200
+    assert client.stub.delete_calls == [("abc", False)]
+
+
+def test_delete_forwards_with_result_flag(client):
+    r = client.delete("/tasks/abc?with_result=true")
+
+    assert r.status_code == 200
+    assert client.stub.delete_calls == [("abc", True)]
+
+
+def test_pause_task_ok(client):
+    r = client.post("/tasks/abc/pause")
+
+    assert r.status_code == 200
+    assert client.stub.pause_calls == ["abc"]
+
+
+def test_pause_task_conflict_when_not_pausable(client):
+    client.stub.pause_result = False
+
+    r = client.post("/tasks/abc/pause")
+
+    assert r.status_code == 409
+
+
+def test_start_task_ok(client):
+    r = client.post("/tasks/abc/start")
+
+    assert r.status_code == 200
+    assert client.stub.start_calls == ["abc"]
+
+
+def test_start_task_conflict_when_not_restartable(client):
+    client.stub.start_result = False
+
+    r = client.post("/tasks/abc/start")
+
+    assert r.status_code == 409
+
+
+def test_stop_task_ok(client):
+    r = client.post("/tasks/abc/stop")
+
+    assert r.status_code == 200
+    assert client.stub.stop_calls == ["abc"]
+
+
+def test_stop_task_conflict_when_not_running(client):
+    client.stub.stop_result = False
+
+    r = client.post("/tasks/abc/stop")
+
+    assert r.status_code == 409
+
+
+def test_pause_unstarted_returns_count(client):
+    client.stub.pause_pending_result = 3
+
+    r = client.post("/tasks/pause-unstarted")
+
+    assert r.status_code == 200
+    assert r.json() == {"count": 3}
+    assert client.stub.pause_pending_calls == 1
+
+
+def test_delete_completed_forwards_with_result_flag(client):
+    client.stub.bulk_delete_result = 2
+
+    r = client.delete("/tasks/completed?with_result=true")
+
+    assert r.status_code == 200
+    assert r.json() == {"count": 2}
+    assert client.stub.bulk_delete_calls == [(("completed",), True)]
+
+
+def test_delete_completed_defaults_to_keeping_files(client):
+    r = client.delete("/tasks/completed")
+
+    assert r.status_code == 200
+    assert client.stub.bulk_delete_calls == [(("completed",), False)]
+
+
+def test_delete_failed_forwards_with_result_flag(client):
+    r = client.delete("/tasks/failed?with_result=true")
+
+    assert r.status_code == 200
+    assert client.stub.bulk_delete_calls == [(("failed",), True)]

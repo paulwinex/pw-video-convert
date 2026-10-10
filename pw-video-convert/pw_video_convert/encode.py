@@ -1,4 +1,5 @@
 import re
+import shlex
 import subprocess
 from tempfile import TemporaryFile
 from typing import Callable, List, Optional, Tuple, Union
@@ -208,5 +209,6 @@ def run_encode(
     cmd = build_encode_cmd(
         file_input, file_output, info, quality_value, hw, preset, container, resolution
     )
+    print(f'Command: {shlex.join(cmd)}')
     _, error = get_progress(cmd, output_fn, info['frame_count'], cancel_event)
     return error

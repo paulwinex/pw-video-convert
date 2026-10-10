@@ -21,7 +21,7 @@ dev:
 # запуск без reload
 [working-directory: 'backend']
 run:
-	uv run uvicorn app.main:app --host 127.0.0.1 --port 8000 --timeout-graceful-shutdown 3
+	uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --timeout-graceful-shutdown 3
 
 # фронтенд dev-сервер
 [working-directory: 'frontend']

@@ -4,7 +4,13 @@ export interface Task {
   id: number;
   uuid: string;
   name: string;
-  status: 'pending' | 'running' | 'completed' | 'failed';
+  status:
+    | 'pending'
+    | 'running'
+    | 'paused'
+    | 'completed'
+    | 'failed'
+    | 'canceled';
   progress: number;
   error: string | null;
   result: string | null;
@@ -12,6 +18,8 @@ export interface Task {
   created_at: string | null;
   started_at: string | null;
   finished_at: string | null;
+  size_before: number | null;
+  size_after: number | null;
   has_log: boolean;
 }
 
@@ -102,14 +110,69 @@ export async function createTask(payload: TaskCreatePayload): Promise<void> {
   }
 }
 
-export async function deleteTask(uuid: string): Promise<void> {
-  const res = await fetch(`/tasks/${uuid}`, { method: 'DELETE' });
+export async function deleteTask(
+  uuid: string,
+  withResult = false
+): Promise<void> {
+  const query = withResult ? '?with_result=true' : '';
+  const res = await fetch(`/tasks/${uuid}${query}`, { method: 'DELETE' });
   if (!res.ok) {
     const body = (await res.json().catch(() => null)) as
       | { detail?: string }
       | null;
     throw new Error(body?.detail ?? `DELETE /tasks: ${res.status}`);
   }
+}
+
+async function postTaskAction(
+  uuid: string,
+  action: 'pause' | 'start' | 'stop'
+): Promise<void> {
+  const res = await fetch(`/tasks/${uuid}/${action}`, { method: 'POST' });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as
+      | { detail?: string }
+      | null;
+    throw new Error(body?.detail ?? `POST /tasks/${uuid}/${action}: ${res.status}`);
+  }
+}
+
+export function pauseTask(uuid: string): Promise<void> {
+  return postTaskAction(uuid, 'pause');
+}
+
+export function startTask(uuid: string): Promise<void> {
+  return postTaskAction(uuid, 'start');
+}
+
+export function stopTask(uuid: string): Promise<void> {
+  return postTaskAction(uuid, 'stop');
+}
+
+export async function pauseUnstarted(): Promise<number> {
+  const res = await fetch('/tasks/pause-unstarted', { method: 'POST' });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as
+      | { detail?: string }
+      | null;
+    throw new Error(body?.detail ?? `POST /tasks/pause-unstarted: ${res.status}`);
+  }
+  return ((await res.json()) as { count: number }).count;
+}
+
+export async function deleteByActivity(
+  kind: 'completed' | 'failed',
+  withResult = false
+): Promise<number> {
+  const query = withResult ? '?with_result=true' : '';
+  const res = await fetch(`/tasks/${kind}${query}`, { method: 'DELETE' });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as
+      | { detail?: string }
+      | null;
+    throw new Error(body?.detail ?? `DELETE /tasks/${kind}: ${res.status}`);
+  }
+  return ((await res.json()) as { count: number }).count;
 }
 
 export async function fetchLog(uuid: string): Promise<string> {

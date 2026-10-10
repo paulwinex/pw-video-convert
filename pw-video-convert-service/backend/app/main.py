@@ -25,6 +25,8 @@ async def lifespan(app: FastAPI):
     init_db([Task])
     logger.info("start task manager...")
     await manager.start()
+    logger.info("resume unfinished tasks...")
+    await manager.resume()
     yield
     logger.info("stop task manager...")
     await manager.stop()

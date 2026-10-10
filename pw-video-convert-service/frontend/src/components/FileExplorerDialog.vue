@@ -1,6 +1,6 @@
 <template>
-  <q-dialog v-model="show" persistent>
-    <q-card class="column" style="width: 1100px; max-width: 95vw">
+  <q-dialog v-model="show" persistent maximized>
+    <q-card class="column full-height">
       <q-card-section class="row items-center q-py-sm">
         <div class="text-h6">Выбор файлов</div>
         <q-space />
@@ -9,11 +9,11 @@
 
       <q-separator />
 
-      <q-card-section class="q-pa-none">
+      <q-card-section class="col q-pa-none">
         <FileExplorer
           ref="explorerRef"
           :mime="mime"
-          height="65vh"
+          height="100%"
           @update:selection="onSelection"
         />
       </q-card-section>
