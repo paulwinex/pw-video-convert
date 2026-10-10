@@ -29,6 +29,8 @@ signal.signal(signal.SIGINT, _sigint_handler)
 FILLED = '█'
 EMPTY = '░'
 
+OUTPUT_CODEC = 'av1'
+
 
 def bold(text: str) -> str:
     return f"\033[1m{text}\033[0m"
@@ -56,8 +58,10 @@ def make_progress_printer():
     return print_progress
 
 
-def resolve_output(file_input: Path, output_arg: Optional[str], container: str) -> Path:
+def resolve_output(file_input: Path, output_arg: Optional[str], container: str,
+                   add_codec_name_suffix: bool = True) -> Path:
     ext = 'mkv' if container == 'mkv' else 'mp4'
+    codec = f'.{OUTPUT_CODEC}' if add_codec_name_suffix else ''
 
     if output_arg is None:
         target_dir = file_input.parent
@@ -70,13 +74,13 @@ def resolve_output(file_input: Path, output_arg: Optional[str], container: str) 
 
     stem = file_input.stem
     source = file_input.resolve()
-    path = (target_dir / f'{stem}.{ext}').resolve()
+    path = (target_dir / f'{stem}{codec}.{ext}').resolve()
     if path != source:
         return path
 
     suffix = 1
     while True:
-        name = f'{stem}.out{"" if suffix == 1 else suffix}.{ext}'
+        name = f'{stem}{codec}.out{"" if suffix == 1 else suffix}.{ext}'
         path = (target_dir / name).resolve()
         if path != source:
             return path
