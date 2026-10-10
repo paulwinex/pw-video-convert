@@ -8,9 +8,7 @@ PORT=8055
 UV_BIN=$(which uv)
 RUN_USER="${UID}"
 RUN_GROUP="$(id -g)"
-ENTRYPOINT="uv run uvicorn app.main:app --host 0.0.0.0 --port ${PORT} --timeout-graceful-shutdown 3"
-EXTRA_ARGS=""                             # доп. аргументы, если нужны
-echo $RUN_GROUP $RUN_USER $WORK_DIR
+COMMAND="uv run uvicorn app.main:app --host 0.0.0.0 --port ${PORT} --timeout-graceful-shutdown 3"
 
 UNIT_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
 
@@ -39,7 +37,7 @@ Group=${RUN_GROUP}
 WorkingDirectory=${WORK_DIR}
 Environment=PATH=${WORK_DIR}/.venv/bin:/usr/local/bin:/usr/bin:/bin
 Environment=PYTHONUNBUFFERED=1
-ExecStart=${UV_BIN} run python ${ENTRYPOINT} ${EXTRA_ARGS}
+ExecStart=${COMMAND}
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
