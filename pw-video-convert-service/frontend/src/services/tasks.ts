@@ -160,6 +160,17 @@ export async function pauseUnstarted(): Promise<number> {
   return ((await res.json()) as { count: number }).count;
 }
 
+export async function startStopped(): Promise<number> {
+  const res = await fetch('/tasks/start-stopped', { method: 'POST' });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as
+      | { detail?: string }
+      | null;
+    throw new Error(body?.detail ?? `POST /tasks/start-stopped: ${res.status}`);
+  }
+  return ((await res.json()) as { count: number }).count;
+}
+
 export async function deleteByActivity(
   kind: 'completed' | 'failed',
   withResult = false

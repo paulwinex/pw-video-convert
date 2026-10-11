@@ -56,6 +56,17 @@
               <q-item
                 clickable
                 v-close-popup
+                :disable="!hasStopped"
+                @click="onStartAll"
+              >
+                <q-item-section avatar>
+                  <q-icon name="play_arrow" color="primary" />
+                </q-item-section>
+                <q-item-section>Запустить все остановленные</q-item-section>
+              </q-item>
+              <q-item
+                clickable
+                v-close-popup
                 :disable="!hasCompleted"
                 @click="askBulkDelete('completed')"
               >
@@ -323,6 +334,7 @@ import {
   fetchTasks,
   pauseTask,
   pauseUnstarted,
+  startStopped,
   startTask,
   stopTask,
   tasks,
@@ -347,6 +359,10 @@ const hasCompleted = computed(() =>
   tasks.value.some((t) => t.status === 'completed')
 );
 const hasFailed = computed(() => tasks.value.some((t) => t.status === 'failed'));
+
+const hasStopped = computed(() =>
+  tasks.value.some((t) => t.status === 'paused' || t.status === 'canceled')
+);
 
 const logOpen = ref(false);
 const logUuid = ref('');
@@ -581,6 +597,19 @@ async function onPauseAll(): Promise<void> {
     $q.notify({
       type: count ? 'info' : 'warning',
       message: count ? `Отложено задач: ${count}` : 'Нет неначатых задач',
+    });
+  } catch (e) {
+    $q.notify({ type: 'negative', message: String(e) });
+  }
+}
+
+async function onStartAll(): Promise<void> {
+  try {
+    const count = await startStopped();
+    await fetchTasks();
+    $q.notify({
+      type: count ? 'info' : 'warning',
+      message: count ? `Запущено задач: ${count}` : 'Нет остановленных задач',
     });
   } catch (e) {
     $q.notify({ type: 'negative', message: String(e) });
