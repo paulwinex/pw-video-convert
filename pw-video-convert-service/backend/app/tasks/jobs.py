@@ -7,6 +7,7 @@ from typing import Any, Dict
 
 import app.core.config  # noqa: F401  # installs pw-video-convert on sys.path
 from pw_video_convert import cli, probe
+from pw_video_convert import quality as quality_mod
 
 from app.utils.tasklog import log_path, write_log
 
@@ -57,6 +58,26 @@ def convert_job(
                 "Warning: hardware VAAPI AV1 unavailable, "
                 "falling back to software SVT-AV1"
             )
+
+        crf = quality_mod.crf_for_quality(quality)
+        preset = quality_mod.preset_for_quality(quality)
+        if use_hw:
+            encoder = f"hw av1_vaapi qidx={quality_mod.vaapi_quality_for_quality(quality)}"
+        else:
+            encoder = f"sw svt-av1 crf={crf} preset={preset}"
+        if resolution is None:
+            res_txt = "source"
+        else:
+            res_txt = f"{resolution[0]}x{resolution[1]}"
+        print("--- launch params ---")
+        print(f"input: {file_input}")
+        print(f"output: {output_path}")
+        print(f"container: {container}")
+        print(f"quality: {quality}")
+        print(f"software: {str(software).lower()}")
+        print(f"resolution: {res_txt}")
+        print(f"encoder: {encoder}")
+        print("---")
 
         def on_progress(fraction: float, seconds_left: int | None) -> None:
             nonlocal last_progress

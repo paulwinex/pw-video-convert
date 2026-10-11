@@ -296,3 +296,60 @@ def test_pump_ignores_updates_for_terminal_task(tmp_path):
         assert Task.get(Task.uuid == u).status == "canceled"
     finally:
         remove_log(u)
+
+
+def test_pump_completed_stores_output_size(tmp_path):
+    init_db([Task])
+    src = tmp_path / "in.mp4"
+    src.write_bytes(b"x" * 1000)
+    out = tmp_path / "out.mkv"
+    out.write_bytes(b"x" * 300)
+    u = uuid_mod.uuid4().hex
+    Task.create(
+        uuid=u,
+        name=src.name,
+        status="pending",
+        progress=0,
+        params=json.dumps({"input": str(src), "output": str(out)}),
+    )
+    _created.append(u)
+    try:
+        async def run():
+            pump_task = asyncio.create_task(manager._pump_loop())
+            manager._mp_q.put(
+                {
+                    "task_uuid": u,
+                    "status": "completed",
+                    "progress": 100,
+                    "result": str(out),
+                }
+            )
+            await asyncio.sleep(0.4)
+            pump_task.cancel()
+            try:
+                await pump_task
+            except asyncio.CancelledError:
+                pass
+
+        asyncio.run(run())
+
+        data = json.loads(Task.get(Task.uuid == u).data)
+        assert data["output_size"] == 300
+    finally:
+        remove_log(u)
+
+
+def test_start_removes_previous_output_size(tmp_path):
+    u, out = make_task(tmp_path, status="paused")
+    Task.update(
+        progress=50,
+        result=str(out),
+        data=json.dumps({"source_size": 1000, "output_size": 400}),
+    ).where(Task.uuid == u).execute()
+    try:
+        assert asyncio.run(manager.start_task(u)) is True
+
+        data = json.loads(Task.get(Task.uuid == u).data)
+        assert data == {"source_size": 1000}
+    finally:
+        remove_log(u)

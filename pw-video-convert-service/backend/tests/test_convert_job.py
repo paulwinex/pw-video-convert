@@ -39,6 +39,81 @@ def test_convert_job_success(tiny_clip: Path, tmp_path: Path, drain):
     assert "Encoder:" in log_text  # plan lines went to the task log
 
 
+def test_convert_job_logs_launch_params(tiny_clip: Path, tmp_path: Path, drain):
+    uuid = "test-convert-params"
+    out = tmp_path / "result" / "tiny.mkv"
+    q: mp.Queue = mp.Queue()
+
+    try:
+        convert_job(
+            task_uuid=uuid,
+            progress_q=q,
+            input=str(tiny_clip),
+            output=str(out),
+            quality=10,
+            container="mkv",
+            software=True,
+            resolution=[1280, 720],
+        )
+        drain(q)
+        log_text = log_path(uuid).read_text(encoding="utf-8")
+    finally:
+        remove_log(uuid)
+
+    assert "--- launch params ---" in log_text
+    assert f"input: {tiny_clip}" in log_text
+    assert f"output: {out}" in log_text
+    assert "container: mkv" in log_text
+    assert "quality: 10" in log_text
+    assert "software: true" in log_text
+    assert "resolution: 1280x720" in log_text
+    assert "encoder: sw svt-av1 crf=14 preset=6" in log_text
+
+
+def test_convert_job_logs_hw_encoder_params(tmp_path, monkeypatch, drain):
+    import app.tasks.jobs as jobs_mod
+    import pw_video_convert.cli as cli_module
+
+    monkeypatch.setattr(jobs_mod.probe, "will_ha_work", lambda: True)
+    uuid = "test-convert-hwparams"
+    src = tmp_path / "src.mkv"
+    src.write_bytes(b"x")
+    out = tmp_path / "resized" / "tiny.mkv"
+    q: mp.Queue = mp.Queue()
+    seen = {}
+
+    def fake_encode_once(file_input, output_path, q_, use_hw, container,
+                         progress_fn=None, cancel_fn=None, resolution=None):
+        seen["use_hw"] = use_hw
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(output_path).write_bytes(b"x")
+        progress_fn(1.0, None)
+        return 0
+
+    monkeypatch.setattr(cli_module, "encode_once", fake_encode_once)
+
+    try:
+        convert_job(
+            task_uuid=uuid,
+            progress_q=q,
+            input=str(src),
+            output=str(out),
+            quality=5,
+            container="mkv",
+            software=False,
+            resolution=None,
+        )
+        drain(q)
+        log_text = log_path(uuid).read_text(encoding="utf-8")
+    finally:
+        remove_log(uuid)
+
+    assert seen["use_hw"] is True
+    assert "encoder: hw av1_vaapi qidx=104" in log_text
+    assert "resolution: source" in log_text
+    assert "software: false" in log_text
+
+
 def test_convert_job_missing_input_fails(tiny_clip: Path, tmp_path: Path, drain):
     uuid = "test-convert-missing"
     q: mp.Queue = mp.Queue()

@@ -12,7 +12,8 @@ from peewee import DoesNotExist
 from app.api.schemas import TaskCreate
 from app.core.db import db
 from app.core.log import get_logger
-from app.models.task import Task
+from app.models.task import Task, drop_task_data, set_task_data
+from app.utils.disk import file_size
 from app.utils.tasklog import remove_log, write_log
 
 from .jobs import run_job
@@ -134,6 +135,8 @@ class TaskManager:
         }
         name = input_path.name
         spec = JobSpec(uuid=job_uuid, name=name, params=params)
+        source_size = file_size(str(input_path))
+        data = json.dumps({"source_size": source_size}) if source_size is not None else None
 
         with db.atomic():
             Task.create(
@@ -142,6 +145,7 @@ class TaskManager:
                 status="pending",
                 progress=0,
                 params=json.dumps(params),
+                data=data,
                 created_at=datetime.datetime.utcnow(),
             )
 
@@ -176,6 +180,8 @@ class TaskManager:
                 .where(Task.uuid.in_(uuids))
                 .execute()
             )
+            for t in Task.select().where(Task.uuid.in_(uuids)):
+                drop_task_data(t, "output_size")
         for spec in specs:
             await self._enqueue(spec)
             write_log(spec.uuid, "resuming after restart")
@@ -212,6 +218,7 @@ class TaskManager:
             t.result = None
             t.started_at = None
             t.finished_at = None
+            drop_task_data(t, "output_size")
             t.save()
         await self._enqueue(JobSpec(uuid=t.uuid, name=t.name, params=params))
         write_log(task_uuid, "restarted by user")
@@ -376,6 +383,7 @@ class TaskManager:
                 t.result = None
                 t.started_at = None
                 t.finished_at = None
+                drop_task_data(t, "output_size")
                 t.save()
 
             self._running_uuid = spec.uuid
@@ -429,6 +437,8 @@ class TaskManager:
                         task.error = error
                     if result:
                         task.result = result
+                    if status == "completed" and result:
+                        set_task_data(task, output_size=file_size(result))
                     if status in ("completed", "failed"):
                         task.finished_at = datetime.datetime.utcnow()
                     task.save()

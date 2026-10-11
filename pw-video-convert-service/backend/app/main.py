@@ -20,7 +20,7 @@ if not FRONTEND_DIST.exists():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print('USER ROOT:', filesystem.get_user_root())
+    logger.info("user root: %s", filesystem.get_user_root())
     logger.info("init db...")
     init_db([Task])
     logger.info("start task manager...")

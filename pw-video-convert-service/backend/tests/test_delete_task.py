@@ -2,10 +2,27 @@ import asyncio
 import json
 import uuid as uuid_mod
 
+import pytest
+
 from app.core.db import init_db
 from app.models import Task
 from app.tasks.manager import manager
 from app.utils.tasklog import remove_log
+
+
+@pytest.fixture(autouse=True)
+def isolated_db(tmp_path):
+    from app.core import db as db_module
+
+    target = db_module.db
+    original = target.database
+    target.close()
+    target.init(tmp_path / "tasks.db")
+    target.connect(reuse_if_open=True)
+    target.create_tables([Task])
+    yield
+    target.close()
+    target.init(original)
 
 
 def make_task(tmp_path, *, status="completed", result=True):

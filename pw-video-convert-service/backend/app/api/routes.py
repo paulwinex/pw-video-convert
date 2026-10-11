@@ -42,12 +42,9 @@ async def create_task(
 ):
     try:
         raw_input = Path(payload.input).expanduser()
-        print('RAW', raw_input)
         if raw_input.is_absolute():
-            print('ABS')
             input_path = raw_input.resolve()
         else:
-            print('REL FROM', filesystem.get_user_root())
             input_path = (filesystem.get_user_root() / raw_input).resolve()
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=f"invalid input path: {exc}")
