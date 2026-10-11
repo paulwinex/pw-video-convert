@@ -2,19 +2,19 @@
   <q-dialog v-model="show" persistent>
     <q-card style="min-width: 600px; max-width: 90vw">
       <q-card-section>
-        <div class="text-h6">Создать задачу</div>
+        <div class="text-h6">Create task</div>
       </q-card-section>
 
       <q-card-section class="q-pt-none q-gutter-md">
         <div>
-          <div class="text-subtitle2 q-mb-xs">Files (один путь в строке)</div>
+          <div class="text-subtitle2 q-mb-xs">Files (one path per line)</div>
           <q-input
             v-model="filesText"
             type="textarea"
             dense
             autogrow
             :input-style="{ minHeight: '96px', fontFamily: 'monospace' }"
-            placeholder="/путь/к/видео1.mkv&#10;/путь/к/видео2.mp4"
+            placeholder="/path/to/video1.mkv&#10;/path/to/video2.mp4"
           />
           <div class="row items-center q-mt-xs">
             <q-btn
@@ -22,12 +22,12 @@
               outline
               size="sm"
               icon="folder_open"
-              label="Выбрать файлы"
+              label="Choose files"
               @click="browserOpen = true"
             />
             <q-space />
             <div class="text-caption text-grey-7">
-              Файлов: {{ parsedCount }}
+              Files: {{ parsedCount }}
             </div>
           </div>
         </div>
@@ -49,8 +49,8 @@
       </q-card-section>
 
       <q-card-actions align="right">
-        <q-btn flat label="Отмена" v-close-popup @click="close" :disable="loading" />
-        <q-btn color="primary" label="Создать" @click="submit" :loading="loading" />
+        <q-btn flat label="Cancel" v-close-popup @click="close" :disable="loading" />
+        <q-btn color="primary" label="Create" @click="submit" :loading="loading" />
       </q-card-actions>
 
       <FileExplorerDialog
@@ -148,7 +148,7 @@ async function submit() {
   const errors: string[] = [];
   const inputs = parseFiles(filesText.value);
   if (inputs.length === 0) {
-    errors.push('Укажите хотя бы один путь к файлу');
+    errors.push('Specify at least one file path');
   }
   const v = validateOutput(output.value);
   if (!v.ok) {

@@ -2,9 +2,9 @@
   <q-dialog v-model="show" persistent maximized>
     <q-card class="column full-height">
       <q-card-section class="row items-center q-py-sm">
-        <div class="text-h6">Выбор файлов</div>
+        <div class="text-h6">Select files</div>
         <q-space />
-        <div class="text-caption text-grey-7">Выбрано: {{ selected.length }}</div>
+        <div class="text-caption text-grey-7">Selected: {{ selected.length }}</div>
       </q-card-section>
 
       <q-separator />
@@ -21,10 +21,10 @@
       <q-separator />
 
       <q-card-actions align="right">
-        <q-btn flat label="Отмена" @click="close" />
+        <q-btn flat label="Cancel" @click="close" />
         <q-btn
           color="primary"
-          :label="`Добавить (${selected.length})`"
+          :label="`Add (${selected.length})`"
           :disable="selected.length === 0"
           @click="confirm"
         />

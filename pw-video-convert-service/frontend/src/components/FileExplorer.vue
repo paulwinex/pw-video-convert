@@ -14,12 +14,12 @@ USAGE:
       :limits="[15, 70]"
       style="height: 100%"
     >
-      <!-- ============== ЛЕВО: дерево каталогов ============== -->
+      <!-- ============== LEFT: folder tree ============== -->
       <template #before>
         <div class="column full-height">
           <div class="q-px-sm q-py-xs row items-center">
             <q-icon name="folder" size="18px" class="q-mr-xs" />
-            <div class="text-subtitle2">Каталоги</div>
+            <div class="text-subtitle2">Folders</div>
             <q-space />
             <q-btn
               dense flat round size="sm"
@@ -27,7 +27,7 @@ USAGE:
               :loading="refreshing"
               @click="refreshAll"
             >
-              <q-tooltip>Перезагрузить дерево и список</q-tooltip>
+              <q-tooltip>Reload tree and list</q-tooltip>
             </q-btn>
           </div>
           <q-separator />
@@ -47,17 +47,17 @@ USAGE:
         </div>
       </template>
 
-      <!-- ============== ПРАВО: список файлов ============== -->
+      <!-- ============== RIGHT: file list ============== -->
       <template #after>
         <div class="column full-height">
           <div class="q-px-sm q-py-xs row items-center">
             <q-icon name="insert_drive_file" size="18px" class="q-mr-xs" />
             <div class="text-subtitle2 ellipsis">
-              {{ selectedDir || '~ (корень)' }}
+              {{ selectedDir || '~ (root)' }}
             </div>
             <q-space />
             <div class="text-caption text-grey-7">
-              Выбрано: {{ selectedFiles.length }}
+              Selected: {{ selectedFiles.length }}
             </div>
           </div>
           <q-separator />
@@ -75,7 +75,7 @@ USAGE:
             selection="multiple"
             v-model:selected="selectedFiles"
             :loading="loadingFiles"
-            no-data-label="Нет подходящих файлов"
+            no-data-label="No matching files"
           >
             <template #body-cell-name="p">
               <q-td :props="p">
@@ -101,7 +101,7 @@ import { Notify } from 'quasar'
 
 const props = defineProps({
   apiListUrl: { type: String, default: '/fs' },
-  mime:        { type: Array,  default: () => [] },   // MIME-паттерны, напр. ['video/*']
+  mime:        { type: Array,  default: () => [] },   // MIME patterns, e.g. ['video/*']
   height:      { type: String, default: '600px' }
 })
 
@@ -110,7 +110,7 @@ const emit = defineEmits(['update:selection'])
 /* ============================================================
  * API stub
  * ============================================================
- * Ждём от бэкенда ответ вида:
+ * Expected backend response shape:
  *   {
  *     path: "docs/sub",
  *     entries: [
@@ -118,9 +118,9 @@ const emit = defineEmits(['update:selection'])
  *       ...
  *     ]
  *   }
- * `path` всегда относительный от корня пользователя, разделитель "/".
- * Фильтрация по mime выполняется на бэкенде: каталоги приходят всегда,
- * а файлы — только те, что подходят под переданные паттерны.
+ * `path` is always relative to the user root, separated by "/".
+ * MIME filtering happens on the backend: folders are always returned,
+ * while files are only those matching the given patterns.
  */
 async function apiListDir (relPath) {
   const params = new URLSearchParams()
@@ -138,17 +138,17 @@ async function apiListDir (relPath) {
 }
 
 /* ============================================================
- * Состояние дерева
+ * Tree state
  * ============================================================ */
-const splitterModel    = ref(30)        // доля ширины дерева, %
+const splitterModel    = ref(30)        // tree width share, %
 const treeNodes        = ref([])
-const expandedKeys     = ref([])        // массив path раскрытых узлов
-const selectedTreePath = ref(null)      // path выделенного каталога
-const selectedDir      = ref('')        // текущая папка для списка справа
+const expandedKeys     = ref([])        // paths of expanded nodes
+const selectedTreePath = ref(null)      // path of the selected folder
+const selectedDir      = ref('')        // current folder for the right-hand list
 const refreshing       = ref(false)
 
 /* ============================================================
- * Состояние таблицы
+ * Table state
  * ============================================================ */
 const files         = ref([])
 const selectedFiles = ref([])
@@ -156,12 +156,12 @@ const loadingFiles  = ref(false)
 const pagination    = ref({ page: 1, rowsPerPage: 0 })
 
 const columns = [
-  { name: 'name',     label: 'Имя',      field: 'name',     align: 'left',  sortable: true },
-  { name: 'size',     label: 'Размер',   field: 'size',     align: 'right', sortable: true,
+  { name: 'name',     label: 'Name',     field: 'name',     align: 'left',  sortable: true },
+  { name: 'size',     label: 'Size',     field: 'size',     align: 'right', sortable: true,
     format: (v, row) => row.is_dir || v == null ? '—' : formatSize(v) },
-  { name: 'created',  label: 'Создан',   field: 'created',  align: 'left',  sortable: true,
+  { name: 'created',  label: 'Created',  field: 'created',  align: 'left',  sortable: true,
     format: v => formatDate(v) },
-  { name: 'modified', label: 'Изменён',  field: 'modified', align: 'left',  sortable: true,
+  { name: 'modified', label: 'Modified', field: 'modified', align: 'left',  sortable: true,
     format: v => formatDate(v) }
 ]
 
@@ -181,26 +181,26 @@ function formatDate (iso) {
 }
 
 /* ============================================================
- * Утилиты построения узлов
+ * Node helpers
  * ============================================================ */
 function nodeFromEntry (e) {
   return {
     label: e.name,
     path:  e.path,
     isDir: e.is_dir,
-    // lazy только для каталогов; дети подгрузятся при раскрытии
+    // lazy is only for folders; children load on expand
     lazy:      e.is_dir,
     children:  undefined
   }
 }
 
 /* ============================================================
- * Загрузка дерева (один уровень)
+ * Tree loading (one level)
  * ============================================================ */
 async function loadRoot () {
   const data = await apiListDir('')
-  // Корневой узел — сам каталог пользователя. path = ''.
-  // У него сразу подгрузим детей, чтобы дерево не было пустым.
+  // Root node is the user directory itself. path = ''.
+  // Preload its children so the tree is not empty.
   const root = {
     label: data.path || '~',
     path:  '',
@@ -229,7 +229,7 @@ function onExpandedUpdate (keys) {
 }
 
 /* ============================================================
- * Выбор каталога — грузим файлы
+ * Folder selection — load files
  * ============================================================ */
 watch(selectedTreePath, async (val) => {
   const path = val ?? ''
@@ -242,7 +242,7 @@ async function loadFiles (path) {
   loadingFiles.value = true
   try {
     const data = await apiListDir(path)
-    // Справа показываем только файлы; навигация по каталогам — через дерево.
+    // Show only files on the right; folder navigation happens via the tree.
     files.value = data.entries
       .filter(e => !e.is_dir)
       .map(e => ({
@@ -253,7 +253,7 @@ async function loadFiles (path) {
         created:  e.created,
         modified: e.modified
       }))
-    // очищаем выбор, если старая выборка не пересекается
+    // clear selection entries that are no longer present
     const allowed = new Set(files.value.map(f => f.path))
     selectedFiles.value = selectedFiles.value.filter(f => allowed.has(f.path))
   } catch (e) {
@@ -265,7 +265,7 @@ async function loadFiles (path) {
 }
 
 /* ============================================================
- * Наружу — событие и методы
+ * Exposed event and methods
  * ============================================================ */
 function emitSelection () {
   emit('update:selection', getSelection())
@@ -281,7 +281,7 @@ function getSelection () {
 watch(selectedFiles, emitSelection, { deep: true })
 
 /* ============================================================
- * Перезагрузка: сохранить раскрытые ветки и выбор
+ * Reload: keep expanded branches and selection
  * ============================================================ */
 async function refreshAll () {
   refreshing.value = true
@@ -290,24 +290,24 @@ async function refreshAll () {
     const selectedSnapshot = selectedTreePath.value
     const filesSnapshot    = new Set(selectedFiles.value.map(f => f.path))
 
-    // Пересобираем дерево, начиная с корня, и рекурсивно
-    // восстанавливаем раскрытые ветки (только те, что были раскрыты).
+    // Rebuild the tree from the root and recursively restore
+    // previously expanded branches (only those that were expanded).
     const rootData = await apiListDir('')
     const root = {
       label: rootData.path || '~',
       path:  '',
       isDir: true,
-      lazy:  false,                 // уже загружаем детей вручную
+      lazy:  false,                 // loading children manually already
       children: []
     }
     await fillChildren(root, expandedSnapshot)
     treeNodes.value = [root]
 
-    // Обновляем список файлов активной папки
+    // Refresh the file list of the active folder
     if (selectedSnapshot != null) {
       await loadFiles(selectedSnapshot)
     }
-    // Восстанавливаем выделение в таблице
+    // Restore the table selection
     selectedFiles.value = files.value.filter(f => filesSnapshot.has(f.path))
     emitSelection()
   } catch (e) {
@@ -327,7 +327,7 @@ async function fillChildren (node, expandedSet) {
   for (const child of children) {
     if (expandedSet.has(child.path)) {
       await fillChildren(child, expandedSet)
-      child.lazy = false  // дети уже загружены — lazy не нужен
+      child.lazy = false  // children already loaded — lazy not needed
     }
   }
 }
@@ -338,7 +338,7 @@ async function fillChildren (node, expandedSet) {
 onMounted(async () => {
   try {
     await loadRoot()
-    // Автовыбор корня, чтобы справа сразу был список
+    // Auto-select the root so the right-hand list is populated immediately
     selectedTreePath.value = ''
     expandedKeys.value = ['']
   } catch (e) {

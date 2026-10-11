@@ -8,7 +8,7 @@
           outlined
           clearable
           debounce="150"
-          placeholder="Фильтр по имени файла"
+          placeholder="Filter by file name"
         >
           <template #prepend>
             <q-icon name="search" />
@@ -24,6 +24,9 @@
           <span class="text-grey">({{ disk.percent_used.toFixed(0) }}%)</span>
         </span>
         <span v-else>—</span>
+        <span class="text-grey-5 q-mx-sm">|</span>
+        <q-icon name="compress" size="18px" color="green" />
+        <span>Saved: {{ fmtSize(savedSpace) }}</span>
       </div>
       <div>
         <q-btn flat round icon="menu">
@@ -33,13 +36,13 @@
                 <q-item-section avatar>
                   <q-icon name="add" />
                 </q-item-section>
-                <q-item-section>Создать задачу</q-item-section>
+                <q-item-section>Create task</q-item-section>
               </q-item>
               <q-item clickable v-close-popup @click="onRefresh">
                 <q-item-section avatar>
                   <q-icon name="refresh" />
                 </q-item-section>
-                <q-item-section>Обновить</q-item-section>
+                <q-item-section>Refresh</q-item-section>
               </q-item>
               <q-separator />
               <q-item
@@ -51,7 +54,7 @@
                 <q-item-section avatar>
                   <q-icon name="pause" />
                 </q-item-section>
-                <q-item-section>Остановить все неначатые</q-item-section>
+                <q-item-section>Pause all pending</q-item-section>
               </q-item>
               <q-item
                 clickable
@@ -62,7 +65,7 @@
                 <q-item-section avatar>
                   <q-icon name="play_arrow" color="primary" />
                 </q-item-section>
-                <q-item-section>Запустить все остановленные</q-item-section>
+                <q-item-section>Start all stopped</q-item-section>
               </q-item>
               <q-item
                 clickable
@@ -73,7 +76,7 @@
                 <q-item-section avatar>
                   <q-icon name="delete" color="negative" />
                 </q-item-section>
-                <q-item-section>Удалить завершённые</q-item-section>
+                <q-item-section>Delete completed</q-item-section>
               </q-item>
               <q-item
                 clickable
@@ -84,7 +87,7 @@
                 <q-item-section avatar>
                   <q-icon name="delete" color="negative" />
                 </q-item-section>
-                <q-item-section>Удалить все в ошибке</q-item-section>
+                <q-item-section>Delete all failed</q-item-section>
               </q-item>
             </q-list>
           </q-menu>
@@ -101,7 +104,7 @@
       row-key="uuid"
       :pagination="{ rowsPerPage: 0 }"
       hide-bottom
-      no-data-label="Задач нет"
+      no-data-label="No tasks"
     >
       <template #body-cell-status="props">
         <q-td :props="props">
@@ -139,11 +142,16 @@
       </template>
 
       <template #body-cell-duration="props">
-        <q-td :props="props">{{ durationLabel(props.row) }}</q-td>
+        <q-td :props="props" class="no-wrap">{{ durationLabel(props.row) }}</q-td>
       </template>
 
       <template #body-cell-size="props">
-        <q-td :props="props">{{ sizeLabel(props.row) }}</q-td>
+        <q-td
+          :props="props"
+          :class="{ 'text-orange': sizeGrew(props.row) }"
+          class="no-wrap"
+          >{{ sizeLabel(props.row) }}</q-td
+        >
       </template>
 
       <template #body-cell-actions="props">
@@ -157,7 +165,7 @@
             icon="pause"
             @click="onPause(props.row.uuid)"
           >
-            <q-tooltip>Отложить — убрать из очереди</q-tooltip>
+            <q-tooltip>Pause — remove from queue</q-tooltip>
           </q-btn>
           <q-btn
             v-if="props.row.status === 'running'"
@@ -169,7 +177,7 @@
             color="orange"
             @click="askStop(props.row)"
           >
-            <q-tooltip>Остановить выполнение</q-tooltip>
+            <q-tooltip>Stop execution</q-tooltip>
           </q-btn>
           <q-btn
             v-if="props.row.status === 'paused' || props.row.status === 'canceled'"
@@ -181,7 +189,7 @@
             color="primary"
             @click="onStart(props.row.uuid)"
           >
-            <q-tooltip>Запустить заново</q-tooltip>
+            <q-tooltip>Restart</q-tooltip>
           </q-btn>
           <q-btn
             flat
@@ -193,7 +201,7 @@
             @click="onShowLog(props.row.uuid)"
           >
             <q-tooltip>
-              {{ props.row.has_log ? 'Показать лог задачи' : 'Лог ещё не создан' }}
+              {{ props.row.has_log ? 'Show task log' : 'Log not created yet' }}
             </q-tooltip>
           </q-btn>
           <q-btn
@@ -207,7 +215,7 @@
             @click="askDelete(props.row)"
           >
             <q-tooltip v-if="props.row.status === 'running'">
-              Сначала остановите задачу
+              Stop the task first
             </q-tooltip>
           </q-btn>
         </q-td>
@@ -217,16 +225,16 @@
     <q-dialog v-model="logOpen" full-screen>
       <q-card class="column full-height relative-position">
         <q-bar class="bg-grey-9 text-white">
-          <div class="text-subtitle2">Лог задачи</div>
+          <div class="text-subtitle2">Task log</div>
           <div class="text-caption q-ml-sm" style="font-family: monospace">
             {{ logUuid }}
           </div>
           <q-space />
           <q-btn dense flat round icon="refresh" @click="loadLog">
-            <q-tooltip>Обновить</q-tooltip>
+            <q-tooltip>Refresh</q-tooltip>
           </q-btn>
           <q-btn dense flat round icon="close" v-close-popup>
-            <q-tooltip>Закрыть</q-tooltip>
+            <q-tooltip>Close</q-tooltip>
           </q-btn>
         </q-bar>
 
@@ -240,26 +248,26 @@
 
     <q-dialog v-model="deleteOpen">
       <q-card style="min-width: 440px; max-width: 90vw">
-        <q-card-section class="text-h6">Удалить задачу?</q-card-section>
+        <q-card-section class="text-h6">Delete task?</q-card-section>
         <q-card-section class="q-pt-none">
           <div class="text-body2 ellipsis">{{ deleteName }}</div>
           <div class="text-caption text-grey-7 q-mt-xs">
-            «Удалить вместе с результатом» дополнительно удалит готовый файл.
+            "Delete with result" will also remove the finished file.
           </div>
         </q-card-section>
         <q-card-actions align="right">
-          <q-btn flat label="Отмена" v-close-popup />
+          <q-btn flat label="Cancel" v-close-popup />
           <q-btn
             flat
             color="primary"
-            label="Удалить задачу"
+            label="Delete task"
             :loading="deleteLoading"
             @click="confirmDelete(false)"
           />
           <q-btn
             flat
             color="negative"
-            label="Удалить вместе с результатом"
+            label="Delete with result"
             :loading="deleteLoading"
             @click="confirmDelete(true)"
           />
@@ -269,19 +277,19 @@
 
     <q-dialog v-model="stopOpen">
       <q-card style="min-width: 440px; max-width: 90vw">
-        <q-card-section class="text-h6">Остановить задачу?</q-card-section>
+        <q-card-section class="text-h6">Stop task?</q-card-section>
         <q-card-section class="q-pt-none">
           <div class="text-body2 ellipsis">{{ stopName }}</div>
           <div class="text-caption text-grey-7 q-mt-xs">
-            Выполнение прервётся, а недописанный файл результата будет удалён.
+            Execution will be interrupted and the partial output file removed.
           </div>
         </q-card-section>
         <q-card-actions align="right">
-          <q-btn flat label="Отмена" v-close-popup />
+          <q-btn flat label="Cancel" v-close-popup />
           <q-btn
             flat
             color="negative"
-            label="Остановить"
+            label="Stop"
             :loading="stopLoading"
             @click="confirmStop"
           />
@@ -293,21 +301,21 @@
       <q-card style="min-width: 460px; max-width: 90vw">
         <q-card-section class="text-h6">{{ bulkTitle }}</q-card-section>
         <q-card-section class="q-pt-none text-caption text-grey-7">
-          Удалять только записи задач или вместе с файлами результатов?
+          Delete only task records or the result files as well?
         </q-card-section>
         <q-card-actions align="right">
-          <q-btn flat label="Отмена" v-close-popup />
+          <q-btn flat label="Cancel" v-close-popup />
           <q-btn
             flat
             color="primary"
-            label="Только задачи"
+            label="Tasks only"
             :loading="bulkLoading"
             @click="confirmBulkDelete(false)"
           />
           <q-btn
             flat
             color="negative"
-            label="С удалением файлов"
+            label="With result files"
             :loading="bulkLoading"
             @click="confirmBulkDelete(true)"
           />
@@ -373,32 +381,32 @@ const createDialog = ref(false);
 const createDialogRef = ref<any>(null);
 
 const columns: QTableColumn<Task>[] = [
-  { name: 'name', label: 'Имя файла', field: 'name', align: 'left' },
-  { name: 'status', label: 'Статус', field: 'status', align: 'left' },
-  { name: 'progress', label: 'Прогресс', field: 'progress', align: 'left' },
+  { name: 'name', label: 'File name', field: 'name', align: 'left' },
+  { name: 'status', label: 'Status', field: 'status', align: 'left' },
+  { name: 'progress', label: 'Progress', field: 'progress', align: 'left' },
   {
     name: 'created',
-    label: 'Создана',
+    label: 'Created',
     field: 'created_at',
     align: 'left',
     format: (val) => fmtDateTime(val as string | null),
   },
   {
     name: 'started',
-    label: 'Запущена',
+    label: 'Started',
     field: 'started_at',
     align: 'left',
     format: (val) => fmtDateTime(val as string | null),
   },
   {
     name: 'finished',
-    label: 'Завершена',
+    label: 'Finished',
     field: 'finished_at',
     align: 'left',
     format: (val) => fmtDateTime(val as string | null),
   },
-  { name: 'duration', label: 'Время', field: 'started_at', align: 'left' },
-  { name: 'size', label: 'Размер', field: 'size_before', align: 'left' },
+  { name: 'duration', label: 'Duration', field: 'started_at', align: 'left', style: 'min-width: 220px' },
+  { name: 'size', label: 'Size', field: 'size_before', align: 'left' },
   { name: 'actions', label: '', field: 'id', align: 'right' },
 ];
 
@@ -407,6 +415,16 @@ let tick: ReturnType<typeof setInterval> | undefined;
 
 const disk = ref<DiskInfo | null>(null);
 let diskTimer: ReturnType<typeof setInterval> | undefined;
+
+const savedSpace = computed(() => {
+  let total = 0;
+  for (const t of tasks.value) {
+    if (t.size_before != null && t.size_after != null) {
+      total += t.size_before - t.size_after;
+    }
+  }
+  return total;
+});
 
 async function loadDisk(): Promise<void> {
   try {
@@ -430,12 +448,12 @@ function statusColor(status: Task['status']): string {
 
 function statusLabel(status: Task['status']): string {
   const labels: Record<Task['status'], string> = {
-    pending: 'ожидание',
-    running: 'в работе',
-    paused: 'пауза',
-    completed: 'завершено',
-    failed: 'ошибка',
-    canceled: 'остановлено',
+    pending: 'waiting',
+    running: 'running',
+    paused: 'paused',
+    completed: 'completed',
+    failed: 'failed',
+    canceled: 'stopped',
   };
   return labels[status];
 }
@@ -471,6 +489,11 @@ function sizeLabel(row: Task): string {
   const pct = Math.round((after / before - 1) * 100);
   const sign = pct > 0 ? '+' : '';
   return `${fmtSize(before)} > ${fmtSize(after)} [${sign}${pct}%]`;
+}
+
+function sizeGrew(row: Task): boolean {
+  const { size_before: before, size_after: after } = row;
+  return before != null && after != null && after > before;
 }
 
 function fmtDuration(seconds: number): string {
@@ -522,7 +545,7 @@ async function confirmDelete(withResult: boolean): Promise<void> {
     deleteOpen.value = false;
     $q.notify({
       type: 'info',
-      message: withResult ? 'Задача и результат удалены' : 'Задача удалена',
+      message: withResult ? 'Task and result deleted' : 'Task deleted',
     });
   } catch (e) {
     $q.notify({ type: 'negative', message: String(e) });
@@ -548,7 +571,7 @@ async function confirmStop(): Promise<void> {
     await stopTask(stopUuid.value);
     await fetchTasks();
     stopOpen.value = false;
-    $q.notify({ type: 'info', message: 'Задача остановлена' });
+    $q.notify({ type: 'info', message: 'Task stopped' });
   } catch (e) {
     $q.notify({ type: 'negative', message: String(e) });
   } finally {
@@ -560,7 +583,7 @@ async function onPause(uuid: string): Promise<void> {
   try {
     await pauseTask(uuid);
     await fetchTasks();
-    $q.notify({ type: 'info', message: 'Задача отложена' });
+    $q.notify({ type: 'info', message: 'Task paused' });
   } catch (e) {
     $q.notify({ type: 'negative', message: String(e) });
   }
@@ -570,7 +593,7 @@ async function onStart(uuid: string): Promise<void> {
   try {
     await startTask(uuid);
     await fetchTasks();
-    $q.notify({ type: 'info', message: 'Задача запущена' });
+    $q.notify({ type: 'info', message: 'Task started' });
   } catch (e) {
     $q.notify({ type: 'negative', message: String(e) });
   }
@@ -581,8 +604,8 @@ const bulkKind = ref<'completed' | 'failed'>('completed');
 const bulkLoading = ref(false);
 const bulkTitle = computed(() =>
   bulkKind.value === 'completed'
-    ? 'Удалить завершённые задачи?'
-    : 'Удалить задачи с ошибкой?'
+    ? 'Delete completed tasks?'
+    : 'Delete failed tasks?'
 );
 
 function askBulkDelete(kind: 'completed' | 'failed'): void {
@@ -596,7 +619,7 @@ async function onPauseAll(): Promise<void> {
     await fetchTasks();
     $q.notify({
       type: count ? 'info' : 'warning',
-      message: count ? `Отложено задач: ${count}` : 'Нет неначатых задач',
+      message: count ? `Paused tasks: ${count}` : 'No pending tasks',
     });
   } catch (e) {
     $q.notify({ type: 'negative', message: String(e) });
@@ -609,7 +632,7 @@ async function onStartAll(): Promise<void> {
     await fetchTasks();
     $q.notify({
       type: count ? 'info' : 'warning',
-      message: count ? `Запущено задач: ${count}` : 'Нет остановленных задач',
+      message: count ? `Started tasks: ${count}` : 'No stopped tasks',
     });
   } catch (e) {
     $q.notify({ type: 'negative', message: String(e) });
@@ -624,7 +647,7 @@ async function confirmBulkDelete(withResult: boolean): Promise<void> {
     bulkOpen.value = false;
     $q.notify({
       type: 'info',
-      message: `Удалено задач: ${count}${withResult ? ' (с файлами)' : ''}`,
+      message: `Deleted tasks: ${count}${withResult ? ' (with files)' : ''}`,
     });
   } catch (e) {
     $q.notify({ type: 'negative', message: String(e) });
@@ -661,7 +684,7 @@ async function handleCreateSubmit(payloads: any[]): Promise<void> {
     await fetchTasks();
     createDialog.value = false;
     createDialogRef.value?.reset();
-    $q.notify({ type: 'positive', message: 'Задачи созданы' });
+    $q.notify({ type: 'positive', message: 'Tasks created' });
   } catch (e) {
     createDialogRef.value?.setLoading(false);
     $q.notify({ type: 'negative', message: String(e) });
