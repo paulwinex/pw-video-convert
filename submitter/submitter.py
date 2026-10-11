@@ -13,7 +13,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt
 
 CONFIG_PATH = os.path.expanduser("~/.config/pw-convert.json")
-DEFAULT_BASE_URL = os.getenv("PW_CONV_HOST_URL") or "http://192.168.0.155:8000"
+DEFAULT_BASE_URL = os.getenv("PW_CONV_HOST_URL") or "http://192.168.0.155:8055"
 
 DEFAULTS = {
     "quality": 5,
