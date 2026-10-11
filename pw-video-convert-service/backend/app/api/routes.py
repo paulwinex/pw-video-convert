@@ -102,6 +102,12 @@ async def pause_unstarted(mgr: TaskManager = Depends(get_manager)):
     return {"count": count}
 
 
+@router.post("/tasks/start-stopped")
+async def start_stopped(mgr: TaskManager = Depends(get_manager)):
+    count = await mgr.start_paused()
+    return {"count": count}
+
+
 @router.delete("/tasks/completed")
 async def delete_completed(
     with_result: bool = False,

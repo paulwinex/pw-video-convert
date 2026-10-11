@@ -18,6 +18,7 @@ class StubManager:
         self.start_calls = []
         self.stop_calls = []
         self.pause_pending_calls = 0
+        self.start_paused_calls = 0
         self.bulk_delete_calls = []
         self.pause_result = True
         self.start_result = True
@@ -50,6 +51,10 @@ class StubManager:
 
     async def pause_pending(self) -> int:
         self.pause_pending_calls += 1
+        return self.pause_pending_result
+
+    async def start_paused(self) -> int:
+        self.start_paused_calls += 1
         return self.pause_pending_result
 
     async def delete_by_status(self, statuses, with_result: bool = False) -> int:
@@ -435,6 +440,16 @@ def test_pause_unstarted_returns_count(client):
     assert r.status_code == 200
     assert r.json() == {"count": 3}
     assert client.stub.pause_pending_calls == 1
+
+
+def test_start_stopped_returns_count(client):
+    client.stub.pause_pending_result = 2
+
+    r = client.post("/tasks/start-stopped")
+
+    assert r.status_code == 200
+    assert r.json() == {"count": 2}
+    assert client.stub.start_paused_calls == 1
 
 
 def test_delete_completed_forwards_with_result_flag(client):

@@ -293,6 +293,22 @@ class TaskManager:
         logger.info("paused %d pending task(s)", len(uuids))
         return len(uuids)
 
+    async def start_paused(self) -> int:
+        """Re-queue every restartable (paused/canceled) task."""
+        uuids = [
+            t.uuid
+            for t in Task.select(Task.uuid).where(
+                Task.status.in_(RESTARTABLE_STATUSES)
+            )
+        ]
+        started = 0
+        for u in uuids:
+            if await self.start_task(u):
+                started += 1
+        if started:
+            logger.info("restarted %d stopped task(s)", started)
+        return started
+
     async def delete_by_status(
         self, statuses: tuple, with_result: bool = False
     ) -> int:

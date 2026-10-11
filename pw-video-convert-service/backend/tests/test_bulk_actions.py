@@ -90,6 +90,51 @@ def test_pause_pending_with_nothing_pending_returns_zero(tmp_path):
         remove_log(completed)
 
 
+# --- start_paused ----------------------------------------------------------
+
+def test_start_paused_requeues_paused_and_canceled(tmp_path):
+    paused, _ = make_task(tmp_path, status="paused")
+    canceled, _ = make_task(tmp_path, status="canceled")
+    pending, _ = make_task(tmp_path, status="pending")
+    running, _ = make_task(tmp_path, status="running")
+    completed, _ = make_task(tmp_path, status="completed")
+
+    try:
+        count = asyncio.run(manager.start_paused())
+
+        assert count == 2
+        assert Task.get(Task.uuid == paused).status == "pending"
+        assert Task.get(Task.uuid == canceled).status == "pending"
+        assert Task.get(Task.uuid == pending).status == "pending"
+        assert Task.get(Task.uuid == running).status == "running"
+        assert Task.get(Task.uuid == completed).status == "completed"
+    finally:
+        for u in (paused, canceled, pending, running, completed):
+            remove_log(u)
+
+
+def test_start_paused_skips_task_with_bad_params(tmp_path):
+    src = tmp_path / "in.mp4"
+    src.write_bytes(b"x")
+    u = uuid_mod.uuid4().hex
+    init_db([Task])
+    Task.create(
+        uuid=u,
+        name=src.name,
+        status="paused",
+        progress=0,
+        params=json.dumps({"input": str(src)}),
+    )
+    _created.append(u)
+    try:
+        count = asyncio.run(manager.start_paused())
+
+        assert count == 0
+        assert Task.get(Task.uuid == u).status == "paused"
+    finally:
+        remove_log(u)
+
+
 # --- delete_by_status -------------------------------------------------------
 
 def test_delete_by_status_removes_records_and_keeps_files(tmp_path):
