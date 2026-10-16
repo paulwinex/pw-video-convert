@@ -67,7 +67,7 @@ def test_convert_job_logs_launch_params(tiny_clip: Path, tmp_path: Path, drain):
     assert "quality: 10" in log_text
     assert "software: true" in log_text
     assert "resolution: 1280x720" in log_text
-    assert "encoder: sw svt-av1 crf=14 preset=6" in log_text
+    assert "encoder: sw svt-av1 crf=10 preset=6" in log_text
 
 
 def test_convert_job_logs_hw_encoder_params(tmp_path, monkeypatch, drain):
@@ -109,7 +109,7 @@ def test_convert_job_logs_hw_encoder_params(tmp_path, monkeypatch, drain):
         remove_log(uuid)
 
     assert seen["use_hw"] is True
-    assert "encoder: hw av1_vaapi qidx=104" in log_text
+    assert "encoder: hw av1_vaapi qidx=100" in log_text
     assert "resolution: source" in log_text
     assert "software: false" in log_text
 

@@ -4,13 +4,18 @@ from typing import Dict
 Q_MIN = 1
 Q_MAX = 10
 
+# q=10 targets visually transparent AV1 (re-encode of an already decent
+# H.264 source, only the codec changes): CRF 10 keeps the top tier in the
+# near-lossless region instead of the "good but visibly compressed" CRF 14.
+# Higher tiers are raised proportionally, tapering to the unchanged
+# size-oriented tiers at the bottom of the scale.
 SVT_CRF_BY_Q: Dict[int, int] = {
-    10: 14,
-    9: 16,
-    8: 18,
-    7: 20,
-    6: 23,
-    5: 26,
+    10: 10,
+    9: 13,
+    8: 15,
+    7: 18,
+    6: 21,
+    5: 25,
     4: 29,
     3: 34,
     2: 39,
