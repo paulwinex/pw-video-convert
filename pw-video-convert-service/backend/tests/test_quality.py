@@ -38,3 +38,29 @@ def test_software_crf_is_aggressive_at_lowest_quality():
 def test_software_crf_increases_as_quality_rises():
     values = [quality.crf_for_quality(q) for q in QUALITIES]
     assert values == sorted(values, reverse=True)
+
+
+def test_heavy_source_codecs_get_aggressive_crf():
+    for codec in ("hevc", "h265", "av1", "HEVC"):
+        for q in QUALITIES:
+            assert quality.crf_for_quality(q, codec) > quality.crf_for_quality(q)
+
+
+def test_other_source_codecs_keep_base_crf():
+    for codec in (None, "", "h264", "mpeg4", "vp9"):
+        for q in QUALITIES:
+            assert quality.crf_for_quality(q, codec) == quality.crf_for_quality(q)
+
+
+def test_heavy_source_crf_stays_in_valid_range_and_monotonic():
+    values = [quality.crf_for_quality(q, "hevc") for q in QUALITIES]
+    assert values == sorted(values, reverse=True)
+    assert all(0 <= value <= 51 for value in values)
+
+
+def test_heavy_source_vaapi_qp_tracks_its_crf_scale():
+    for q in QUALITIES:
+        assert (
+            quality.vaapi_quality_for_quality(q, "hevc")
+            == quality.crf_for_quality(q, "hevc") * 4
+        )

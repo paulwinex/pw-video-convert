@@ -46,6 +46,7 @@ def get_media_info(file_input: str) -> dict:
                 fps = -1.0
             video = {
                 'index': stream['index'],
+                'codec_name': stream.get('codec_name', ''),
                 'width': stream.get('width', 0),
                 'height': stream.get('height', 0),
                 'pix_fmt': pix_fmt,

@@ -97,13 +97,13 @@ def fmt_size(size_bytes: int) -> str:
 TEST_QUALITIES: List[int] = [1, 3, 5, 7, 9]
 
 
-def encoder_for(q: int, use_hw: bool) -> Tuple[int, Optional[str], str]:
+def encoder_for(q: int, use_hw: bool, source_codec: Optional[str] = None) -> Tuple[int, Optional[str], str]:
     if use_hw:
-        qv = quality.vaapi_quality_for_quality(q)
+        qv = quality.vaapi_quality_for_quality(q, source_codec)
         return qv, None, f'av1_vaapi CQP qp={qv} (hardware)'
-    preset = quality.preset_for_quality(q)
-    return quality.crf_for_quality(q), preset, \
-        f'libsvtav1 preset {preset} crf {quality.crf_for_quality(q)} (software)'
+    preset = quality.preset_for_quality(q, source_codec)
+    crf = quality.crf_for_quality(q, source_codec)
+    return crf, preset, f'libsvtav1 preset {preset} crf {crf} (software)'
 
 
 def print_plan(info: dict, encoder_name: str, container: str,
@@ -147,7 +147,8 @@ def encode_once(file_input: Path, output_path: Path, q: int,
     info['source'] = str(file_input)
     source_size = info['size']
 
-    quality_value, preset, encoder_name = encoder_for(q, use_hw)
+    source_codec = (info.get('video') or {}).get('codec_name')
+    quality_value, preset, encoder_name = encoder_for(q, use_hw, source_codec)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     print_plan(info, encoder_name, container, resolution)

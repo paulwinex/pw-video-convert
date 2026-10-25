@@ -59,10 +59,16 @@ def convert_job(
                 "falling back to software SVT-AV1"
             )
 
-        crf = quality_mod.crf_for_quality(quality)
-        preset = quality_mod.preset_for_quality(quality)
+        source_codec = None
+        try:
+            info = probe.get_media_info(str(file_input))
+            source_codec = (info.get("video") or {}).get("codec_name")
+        except Exception:
+            source_codec = None
+        crf = quality_mod.crf_for_quality(quality, source_codec)
+        preset = quality_mod.preset_for_quality(quality, source_codec)
         if use_hw:
-            encoder = f"hw av1_vaapi qidx={quality_mod.vaapi_quality_for_quality(quality)}"
+            encoder = f"hw av1_vaapi qidx={quality_mod.vaapi_quality_for_quality(quality, source_codec)}"
         else:
             encoder = f"sw svt-av1 crf={crf} preset={preset}"
         if resolution is None:

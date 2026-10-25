@@ -4,6 +4,13 @@ import app.core.config  # noqa: F401  # installs pw-video-convert on sys.path
 from pw_video_convert import cli
 
 
+def test_probe_reports_source_video_codec(tiny_clip: Path):
+    from pw_video_convert import probe
+
+    video = probe.get_media_info(str(tiny_clip))["video"]
+    assert video["codec_name"] == "h264"
+
+
 def test_encode_once_reports_progress(tiny_clip: Path, tmp_path: Path):
     out = tmp_path / "out.mkv"
     seen: list[float] = []
