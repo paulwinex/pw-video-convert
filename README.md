@@ -71,7 +71,7 @@ Simple Web Service with a FIFO queue of conversion tasks.
 
 #### submitter
 
-![screen 1](./docs/images/img1.jpg "image1")
+<img src="./docs/images/img1.jpg" alt="submitter" title="image1" width="966">
 
 A simple PyQt5 dialog box for sending local files. If your encoding service is hosted on a different machine, the local paths must match those on the encoding machine.
 
