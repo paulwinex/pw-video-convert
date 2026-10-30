@@ -64,6 +64,7 @@ def test_submit_convert_persists_resolved_params(tmp_path: Path):
             "software": True,
             "resolution": None,
             "audio": None,
+            "audio_add": [],
         }
         assert log_path(uuid).is_file()
     finally:
@@ -129,3 +130,51 @@ def test_submit_convert_stores_audio_selection(tmp_path: Path):
     finally:
         row.delete_instance()
         remove_log(uuid)
+
+
+def test_submit_convert_created_paused(tmp_path: Path):
+    src = tmp_path / "movie.mp4"
+    src.write_bytes(b"x")
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    input_path = src.resolve()
+    output_path = (out_dir / "movie.mkv").resolve()
+    body = TaskCreate(input=str(src), paused=True)
+
+    init_db([Task])
+    uuid = asyncio.run(manager.submit_convert(body, input_path, output_path))
+
+    try:
+        row = Task.get(Task.uuid == uuid)
+        assert row.status == "paused"
+        # paused tasks must not enter the execution queue
+        assert manager._submit_q.empty()
+        assert uuid not in manager._queued
+        assert "created paused" in log_path(uuid).read_text(encoding="utf-8")
+    finally:
+        row.delete_instance()
+        remove_log(uuid)
+
+
+def test_submit_convert_default_is_queued(tmp_path: Path):
+    src = tmp_path / "movie.mp4"
+    src.write_bytes(b"x")
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    input_path = src.resolve()
+    output_path = (out_dir / "movie.mkv").resolve()
+    body = TaskCreate(input=str(src))
+
+    init_db([Task])
+    uuid = asyncio.run(manager.submit_convert(body, input_path, output_path))
+
+    try:
+        row = Task.get(Task.uuid == uuid)
+        assert row.status == "pending"
+        assert not manager._submit_q.empty()
+    finally:
+        row.delete_instance()
+        remove_log(uuid)
+        while not manager._submit_q.empty():
+            manager._submit_q.get_nowait()
+        manager._queued.clear()

@@ -24,8 +24,39 @@ RESUMABLE_STATUSES = ("pending", "running")
 RESTARTABLE_STATUSES = ("paused", "canceled")
 TERMINAL_STATUSES = ("completed", "failed", "canceled")
 
-# null queue_order sorts after every explicitly ordered pending task
+# null queue_order sorts after every positioned task
 QUEUE_ORDER_BIG = 1 << 40
+
+# rows in these statuses are pinned to their place in the list; only
+# pending/paused/canceled rows can still be dragged around
+FROZEN_STATUSES = ("running", "completed", "failed")
+
+
+def _display_sorted(tasks: list) -> list:
+    """Table order: queue position descending, list top first.
+
+    queue_order is a row's stable position in the table. New tasks get a
+    position above everything else; a task keeps its position when it starts,
+    finishes or fails. The bottom-most pending row runs next (FIFO: new
+    tasks stack on top, execution drains from the bottom).
+    """
+
+    def key(t: Task):
+        qo = t.queue_order if t.queue_order is not None else -QUEUE_ORDER_BIG
+        return (-qo, -t.id)
+
+    return sorted(tasks, key=key)
+
+
+def _legacy_display_sort_key(t: Task) -> tuple:
+    """Pre-position display order, used only by the data migration:
+    running first, pending by execution order, finished newest first."""
+    if t.status == "running":
+        return (0, 0, -t.id)
+    if t.status == "pending":
+        order = t.queue_order if t.queue_order is not None else QUEUE_ORDER_BIG
+        return (1, order, t.id)
+    return (2, 0, -t.id)
 
 
 @dataclass
@@ -47,17 +78,6 @@ def _load_params(task: Task) -> Optional[Dict[str, Any]]:
     if not isinstance(params.get("input"), str) or not isinstance(params.get("output"), str):
         return None
     return params
-
-
-def _task_dict_sort_key(item: dict) -> tuple:
-    """Display/queue order: running first, then pending by queue_order
-    (next to run first), then everything else newest first."""
-    if item["status"] == "running":
-        return (0, 0, -item["id"])
-    if item["status"] == "pending":
-        order = item["queue_order"] if item["queue_order"] is not None else QUEUE_ORDER_BIG
-        return (1, order, item["id"])
-    return (2, 0, -item["id"])
 
 
 def _remove_file(path: Optional[str]) -> None:
@@ -100,6 +120,27 @@ def unfinished_specs() -> list:
     return specs
 
 
+def migrate_queue_order() -> int:
+    """One-time data migration: give every task a stable list position.
+
+    Preserves the previous display order (running first, pending by execution
+    order, finished newest first). Runs only while some task still has no
+    position, so calling it on every startup is safe.
+    """
+    if not Task.select().where(Task.queue_order.is_null()).exists():
+        return 0
+    rows = sorted(Task.select(), key=_legacy_display_sort_key)
+    n = len(rows)
+    with db.atomic():
+        for i, t in enumerate(rows):
+            qo = n - 1 - i
+            if t.queue_order != qo:
+                t.queue_order = qo
+                t.save()
+    logger.info("assigned list positions to %d task(s)", n)
+    return n
+
+
 class TaskManager:
     def __init__(self) -> None:
         self._submit_q: asyncio.Queue[JobSpec] = asyncio.Queue()
@@ -139,6 +180,7 @@ class TaskManager:
         body: TaskCreate,
         input_path: Path,
         output_path: Path,
+        audio_add: list[dict] | None = None,
     ) -> str:
         job_uuid = uuid_mod.uuid4().hex
         output_path = Path(output_path)
@@ -150,17 +192,19 @@ class TaskManager:
             "software": body.software,
             "resolution": body.resolution,
             "audio": body.audio,
+            "audio_add": audio_add or [],
         }
         name = input_path.name
         spec = JobSpec(uuid=job_uuid, name=name, params=params)
         source_size = file_size(str(input_path))
         data = json.dumps({"source_size": source_size}) if source_size is not None else None
 
+        status = "paused" if body.paused else "pending"
         with db.atomic():
             Task.create(
                 uuid=job_uuid,
                 name=name,
-                status="pending",
+                status=status,
                 progress=0,
                 params=json.dumps(params),
                 data=data,
@@ -168,9 +212,13 @@ class TaskManager:
                 created_at=datetime.datetime.utcnow(),
             )
 
-        await self._enqueue(spec)
-        write_log(job_uuid, f"queued: name={name} params={params}")
-        logger.info("submitted %s", job_uuid)
+        if body.paused:
+            write_log(job_uuid, f"created paused: name={name} params={params}")
+            logger.info("submitted %s (paused)", job_uuid)
+        else:
+            await self._enqueue(spec)
+            write_log(job_uuid, f"queued: name={name} params={params}")
+            logger.info("submitted %s", job_uuid)
         return job_uuid
 
     async def _enqueue(self, spec: JobSpec) -> None:
@@ -181,55 +229,61 @@ class TaskManager:
 
     @staticmethod
     def _next_queue_order() -> int:
-        max_order = (
-            Task.select(fn.MAX(Task.queue_order))
-            .where(Task.status == "pending")
-            .scalar()
-        )
+        """Position for a new task: above everything else."""
+        max_order = Task.select(fn.MAX(Task.queue_order)).scalar()
         return (max_order or -1) + 1
 
     async def reorder(self, task_uuids: list) -> int:
-        """Persist a new execution order for pending tasks.
+        """Persist a new table order coming from the UI.
 
-        `task_uuids` is the desired order; pending tasks missing from it keep
-        their relative order after the listed ones. Raises ValueError for
-        unknown or non-pending uuids.
+        `task_uuids` is the full list top-to-bottom. Only pending/paused/
+        canceled rows may change their relative position; running and
+        finished rows must keep theirs (they merely shift when a movable row
+        is inserted between them). Raises ValueError otherwise.
         """
-        rows = list(Task.select().where(Task.status == "pending"))
+        rows = list(Task.select())
         by_uuid = {t.uuid: t for t in rows}
-        ordered: list = []
         seen: set = set()
+        new_order: list = []
         for u in task_uuids:
             t = by_uuid.get(u)
-            if t is None:
-                raise ValueError(f"not a pending task: {u}")
-            if u in seen:
+            if t is None or u in seen:
                 continue
             seen.add(u)
-            ordered.append(t)
-        final = ordered + [t for t in rows if t.uuid not in seen]
+            new_order.append(t)
+        # tasks the client does not know about yet keep their relative
+        # order after the listed ones
+        new_order.extend(t for t in _display_sorted(rows) if t.uuid not in seen)
+
+        frozen_new = [t.uuid for t in new_order if t.status in FROZEN_STATUSES]
+        frozen_old = [
+            t.uuid for t in _display_sorted(rows) if t.status in FROZEN_STATUSES
+        ]
+        if frozen_new != frozen_old:
+            raise ValueError("cannot change the position of a running or finished task")
 
         with db.atomic():
-            for i, t in enumerate(final):
-                if t.queue_order != i:
-                    t.queue_order = i
+            n = len(new_order)
+            for i, t in enumerate(new_order):
+                qo = n - 1 - i
+                if t.queue_order != qo:
+                    t.queue_order = qo
                     t.save()
 
         self._rebuild_queue()
-        logger.info("reordered %d pending task(s)", len(final))
-        return len(final)
+        logger.info("reordered task list (%d task(s))", n)
+        return n
 
     def _rebuild_queue(self) -> None:
-        """Requeue in-memory specs to match the persisted queue_order.
+        """Requeue in-memory specs so execution follows queue positions:
+        the bottom-most pending row (lowest queue_order) runs first.
 
         Draining and refilling without awaits makes the swap atomic for the
         dispatcher loop, which may be waiting on the queue at the same time.
         """
         order = {
             t.uuid: t.queue_order if t.queue_order is not None else QUEUE_ORDER_BIG
-            for t in Task.select(Task.uuid, Task.queue_order).where(
-                Task.status == "pending"
-            )
+            for t in Task.select(Task.uuid, Task.queue_order)
         }
         specs: list = []
         while True:
@@ -300,10 +354,12 @@ class TaskManager:
             t.result = None
             t.started_at = None
             t.finished_at = None
-            t.queue_order = self._next_queue_order()
             drop_task_data(t, "output_size")
             t.save()
         await self._enqueue(JobSpec(uuid=t.uuid, name=t.name, params=params))
+        # the restarted task keeps its list position, which may not be the
+        # end of the in-memory queue
+        self._rebuild_queue()
         write_log(task_uuid, "restarted by user")
         logger.info("restarted %s", task_uuid)
         return True
@@ -345,8 +401,7 @@ class TaskManager:
         return True
 
     async def list_tasks(self):
-        q = Task.select().order_by(Task.id.desc())
-        return sorted([t.to_dict() for t in q], key=_task_dict_sort_key)
+        return [t.to_dict() for t in _display_sorted(list(Task.select()))]
 
     async def delete_task(self, task_uuid: str, with_result: bool = False) -> bool:
         try:

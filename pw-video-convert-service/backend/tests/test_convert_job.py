@@ -68,7 +68,7 @@ def test_convert_job_logs_launch_params(tiny_clip: Path, tmp_path: Path, drain):
     assert "software: true" in log_text
     assert "resolution: 1280x720" in log_text
     assert "audio tracks: all" in log_text
-    assert "encoder: sw svt-av1 crf=10 preset=6" in log_text
+    assert "encoder: sw svt-av1 crf=7 preset=6" in log_text
 
 
 def test_convert_job_logs_hw_encoder_params(tmp_path, monkeypatch, drain):
@@ -85,7 +85,7 @@ def test_convert_job_logs_hw_encoder_params(tmp_path, monkeypatch, drain):
 
     def fake_encode_once(file_input, output_path, q_, use_hw, container,
                          progress_fn=None, cancel_fn=None, resolution=None,
-                         audio=None):
+                         audio=None, audio_add=None):
         seen["use_hw"] = use_hw
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         Path(output_path).write_bytes(b"x")
@@ -204,9 +204,10 @@ def test_convert_job_forwards_resolution_and_audio(tmp_path, monkeypatch, drain)
 
     def fake_encode_once(file_input, output_path, q_, use_hw, container,
                          progress_fn=None, cancel_fn=None, resolution=None,
-                         audio=None):
+                         audio=None, audio_add=None):
         seen["resolution"] = resolution
         seen["audio"] = audio
+        seen["audio_add"] = audio_add
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         Path(output_path).write_bytes(b"x")
         progress_fn(1.0, None)
@@ -225,6 +226,7 @@ def test_convert_job_forwards_resolution_and_audio(tmp_path, monkeypatch, drain)
             software=True,
             resolution=[1280, 720],
             audio=[1, 3],
+            audio_add=[{"path": "/tmp/vo.mp3", "label": "VO"}],
         )
         msgs = drain(q)
         log_text = log_path(uuid).read_text(encoding="utf-8")
@@ -233,5 +235,7 @@ def test_convert_job_forwards_resolution_and_audio(tmp_path, monkeypatch, drain)
 
     assert seen["resolution"] == [1280, 720]
     assert seen["audio"] == [1, 3]
+    assert seen["audio_add"] == [{"path": "/tmp/vo.mp3", "label": "VO"}]
     assert "audio tracks: 1,3" in log_text
+    assert "audio add: [VO] /tmp/vo.mp3" in log_text
     assert msgs[-1]["status"] == "completed"

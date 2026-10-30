@@ -78,3 +78,41 @@ def test_valid_audio_selection_passes_validation(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(sys, 'argv', ['constrict-mod', '--audio', '2,1,2', str(src)])
     assert cli.main() == 1  # dummy file: fails later while probing, not on --audio
     assert 'invalid --audio' not in capsys.readouterr().err
+
+
+def test_pair_audio_add_binds_label_to_nearest_file():
+    seq = [('add_audio_path', 'a.mp3'), ('add_audio_label', 'VO'),
+           ('add_audio_path', 'b.mp3'), ('add_audio_label', 'Music')]
+    assert cli.pair_audio_add(seq) == [
+        {'path': 'a.mp3', 'label': 'VO'},
+        {'path': 'b.mp3', 'label': 'Music'},
+    ]
+
+
+def test_pair_audio_add_accepts_label_before_file():
+    seq = [('add_audio_label', 'VO'), ('add_audio_path', 'a.mp3')]
+    assert cli.pair_audio_add(seq) == [{'path': 'a.mp3', 'label': 'VO'}]
+
+
+def test_pair_audio_add_defaults_for_unlabeled_files():
+    seq = [('add_audio_path', 'a.mp3'), ('add_audio_path', 'b.mp3')]
+    assert cli.pair_audio_add(seq) == [
+        {'path': 'a.mp3', 'label': 'External audio 1'},
+        {'path': 'b.mp3', 'label': 'External audio 2'},
+    ]
+
+
+def test_pair_audio_add_dangling_label_is_error():
+    with pytest.raises(ValueError, match='without a matching'):
+        cli.pair_audio_add([('add_audio_label', 'VO')])
+
+
+def test_add_audio_file_not_found_is_parser_error(tmp_path, monkeypatch):
+    src = _input(tmp_path)
+    monkeypatch.setattr(
+        sys, 'argv',
+        ['constrict-mod', '-d', str(tmp_path / 'nope.mp3'), str(src)],
+    )
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 2

@@ -32,6 +32,11 @@ height multiple of 16, minimum 128x80), so the encoder never adds its own paddin
 Track numbers are the position among the audio streams as shown in the plan output
 (`a1`, `a2`, ...). Default: keep all audio tracks.
 
+`--add-audio-path -d FILE` - external audio file muxed in as an extra Opus track.
+Repeatable. `--add-audio-label LABEL` sets the track title; labels bind to the
+nearest file in argument order (`-d a.mp3 --add-audio-label VO -d b.mp3 ...`),
+files without a label get `External audio N`.
+
 `-t --test` - text mode: cut 1 minute from the middle and encode samples at q=1,3,5,7,9 into the output directory
 
 `input` - input file

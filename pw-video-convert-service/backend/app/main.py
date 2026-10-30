@@ -11,7 +11,7 @@ from app.core.db import init_db
 from app.core.log import get_logger
 from app.models import Task
 from app.tasks import filesystem
-from app.tasks.manager import manager
+from app.tasks.manager import manager, migrate_queue_order
 
 logger = get_logger("main")
 if not FRONTEND_DIST.exists():
@@ -23,6 +23,7 @@ async def lifespan(app: FastAPI):
     logger.info("user root: %s", filesystem.get_user_root())
     logger.info("init db...")
     init_db([Task])
+    migrate_queue_order()
     logger.info("start task manager...")
     await manager.start()
     logger.info("resume unfinished tasks...")

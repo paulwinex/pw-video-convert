@@ -166,3 +166,44 @@ def test_build_audio_plan_filters_selected_ordinals():
 def test_build_audio_plan_without_selection_keeps_all():
     info = _with_audio(('aac', 2, 128000), ('ac3', 6, 448000))
     assert [t['ordinal'] for t in encode.build_audio_plan(info)] == [0, 1]
+
+
+def _add(path, label, channels=2, bitrate=None):
+    return {'path': path, 'label': label, 'channels': channels,
+            'stream_bitrate': bitrate}
+
+
+def test_audio_add_appends_external_tracks():
+    info = _with_audio(('aac', 2, 128000), ('dts', 6, 1536000))
+    adds = [_add('/tmp/vo.mp3', 'VO', 2, 192000), _add('/tmp/m.flac', 'Music', 6, None)]
+    cmd = encode.build_encode_cmd('in.mkv', 'out.mkv', info, 30, False, '8', 'mkv',
+                                  audio=[1], audio_add=adds)
+    # kept source track is ordinal 1; external maps reference 1:a:0 and 2:a:0
+    assert _maps(cmd) == ['0:v:0', '0:a:1', '1:a:0', '2:a:0']
+    # output index 0 = kept source track (opus), 1 and 2 = external tracks
+    assert cmd[cmd.index('-c:a:0') + 1] == 'libopus'
+    assert cmd[cmd.index('-c:a:1') + 1] == 'libopus'
+    assert cmd[cmd.index('-c:a:2') + 1] == 'libopus'
+    assert cmd[cmd.index('-metadata:s:a:1') + 1] == 'title=VO'
+    assert cmd[cmd.index('-metadata:s:a:2') + 1] == 'title=Music'
+    assert cmd[cmd.index('-b:a:1') + 1] == str(
+        encode.audio_target_bitrate(2, 192000))
+
+
+def test_audio_add_output_index_follows_kept_tracks():
+    info = _with_audio(('aac', 2, 128000), ('ac3', 6, 448000))
+    adds = [_add('/tmp/vo.mp3', 'VO')]
+    cmd = encode.build_encode_cmd('in.mkv', 'out.mkv', info, 30, False, '8', 'mkv',
+                                  audio=[1], audio_add=adds)
+    assert _maps(cmd) == ['0:v:0', '0:a:1', '1:a:0']
+    assert cmd[cmd.index('-metadata:s:a:1') + 1] == 'title=VO'
+    assert '-metadata:s:a:2' not in cmd
+
+
+def test_audio_add_allows_no_source_tracks():
+    info = _with_audio()
+    adds = [_add('/tmp/vo.mp3', 'VO', 2, 128000)]
+    cmd = encode.build_encode_cmd('in.mkv', 'out.mkv', info, 30, False, '8', 'mkv',
+                                  audio_add=adds)
+    assert _maps(cmd) == ['0:v:0', '1:a:0']
+    assert cmd[cmd.index('-metadata:s:a:0') + 1] == 'title=VO'

@@ -117,6 +117,59 @@ def parse_audio_tracks(value: str) -> List[int]:
     return sorted(set(numbers))
 
 
+class _AudioAddAction(argparse.Action):
+    """Collect --add-audio-path / --add-audio-label values in input order."""
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        seq = getattr(namespace, 'audio_add_seq', None)
+        if seq is None:
+            seq = []
+            setattr(namespace, 'audio_add_seq', seq)
+        seq.append((self.dest, values))
+
+
+def pair_audio_add(seq: List[tuple]) -> List[dict]:
+    """Pair path/label occurrences in order; a label binds to the nearest file.
+
+    Both '-d f --label l' and '--label l -d f' pair into (f, l). Files without
+    a label get a default one.
+    """
+    pairs: List[dict] = []
+    pending_paths: List[str] = []
+    pending_labels: List[str] = []
+
+    def flush(path: Optional[str], label: Optional[str]) -> None:
+        if path is None:
+            path = pending_paths.pop(0) if pending_paths else None
+        if label is None:
+            label = pending_labels.pop(0) if pending_labels else None
+        pairs.append({'path': path, 'label': label})
+
+    for kind, value in seq:
+        if kind == 'add_audio_path':
+            if pending_labels:
+                flush(value, pending_labels.pop(0))
+            else:
+                pending_paths.append(value)
+        else:
+            if pending_paths:
+                flush(pending_paths.pop(0), value)
+            else:
+                pending_labels.append(value)
+
+    while pending_paths or pending_labels:
+        path = pending_paths.pop(0) if pending_paths else None
+        label = pending_labels.pop(0) if pending_labels else None
+        if path is None and label is not None:
+            raise ValueError('--add-audio-label without a matching --add-audio-path')
+        pairs.append({'path': path, 'label': label})
+
+    return [
+        {'path': p['path'], 'label': p['label'] or f'External audio {i + 1}'}
+        for i, p in enumerate(pairs)
+    ]
+
+
 def _audio_track_label(ordinal: int, track: dict) -> str:
     tags = [t for t in (track.get('language'), track.get('title')) if t]
     suffix = f' [{", ".join(tags)}]' if tags else ''
@@ -125,7 +178,8 @@ def _audio_track_label(ordinal: int, track: dict) -> str:
 
 def print_plan(info: dict, encoder_name: str, container: str,
                resolution: Optional[Union[str, List[int]]] = None,
-               audio: Optional[List[int]] = None) -> None:
+               audio: Optional[List[int]] = None,
+               audio_add: Optional[List[dict]] = None) -> None:
     print(f'Input: {info["source"]} ({fmt_size(info["size"])})')
     video = info['video']
     print(f'Source: {video["width"]}x{video["height"]}, {video["bit_depth"]}-bit'
@@ -157,6 +211,14 @@ def print_plan(info: dict, encoder_name: str, container: str,
     ]
     print(f'Audio: {audio_summary or "none"}'
           + (f'; dropped: {", ".join(audio_dropped)}' if audio_dropped else ''))
+    for i, item in enumerate(audio_add or []):
+        layout_channels, layout, bitrate = encode._opus_params(
+            item['channels'], item.get('stream_bitrate')
+        )
+        name = Path(item['path']).name
+        print(f'Audio add {i + 1}: [{item["label"]}] {name} '
+              f'{item["codec"]} {item["channels"]}ch -> opus '
+              f'{bitrate // 1000}k ({layout_channels}ch)')
     subs_summary = ', '.join(
         f's{s["ordinal"]} {s["codec"]}->{"copy" if container == "mkv" else "mov_text"}'
         for s in subs_kept
@@ -171,7 +233,8 @@ def encode_once(file_input: Path, output_path: Path, q: int,
                 progress_fn: Optional[Callable[[float, Optional[int]], None]] = None,
                 cancel_fn: Optional[Callable[[], bool]] = None,
                 resolution: Optional[Union[str, List[int]]] = None,
-                audio: Optional[List[int]] = None) -> int:
+                audio: Optional[List[int]] = None,
+                audio_add: Optional[List[dict]] = None) -> int:
     # `audio` holds user-facing 1-based track numbers; encode layer uses 0-based
     # ordinals matching `-map 0:a:N`.
     audio_ordinals = [n - 1 for n in audio] if audio is not None else None
@@ -179,11 +242,34 @@ def encode_once(file_input: Path, output_path: Path, q: int,
     info['source'] = str(file_input)
     source_size = info['size']
 
+    # External audio files: probe the first audio stream of each for opus
+    # parameters; fail early with a clear message.
+    audio_add_info: List[dict] = []
+    for item in audio_add or []:
+        try:
+            tracks = probe.get_audio_tracks(str(item['path']))
+        except Exception as e:
+            print(f'Error: could not read audio file {item["path"]} ({e})',
+                  file=sys.stderr)
+            return 1
+        if not tracks:
+            print(f'Error: no audio stream in {item["path"]}', file=sys.stderr)
+            return 1
+        first = tracks[0]
+        audio_add_info.append({
+            'path': str(item['path']),
+            'label': item['label'],
+            'codec': first['codec'],
+            'channels': first['channels'],
+            'stream_bitrate': first['stream_bitrate'],
+        })
+
     source_codec = (info.get('video') or {}).get('codec_name')
     quality_value, preset, encoder_name = encoder_for(q, use_hw, source_codec)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    print_plan(info, encoder_name, container, resolution, audio=audio_ordinals)
+    print_plan(info, encoder_name, container, resolution,
+               audio=audio_ordinals, audio_add=audio_add_info)
 
     on_progress = progress_fn if progress_fn is not None else make_progress_printer()
     is_cancelled = cancel_fn if cancel_fn is not None else (lambda: CANCELLED)
@@ -196,6 +282,7 @@ def encode_once(file_input: Path, output_path: Path, q: int,
         use_hw, preset, container, on_progress, is_cancelled,
         resolution=resolution,
         audio=audio_ordinals,
+        audio_add=audio_add_info,
     )
 
     print()
@@ -221,7 +308,8 @@ def encode_once(file_input: Path, output_path: Path, q: int,
 
 
 def run_test(file_input: Path, args, use_hw: bool,
-             audio_tracks: Optional[List[int]] = None) -> int:
+             audio_tracks: Optional[List[int]] = None,
+             audio_add: Optional[List[dict]] = None) -> int:
     info = probe.get_media_info(str(file_input))
     target_dir = (Path(args.output).expanduser().resolve()
                   if args.output else file_input.parent)
@@ -254,7 +342,8 @@ def run_test(file_input: Path, args, use_hw: bool,
             out = target_dir / f'{file_input.stem}.q{q}.{ext}'
             print(f'\n=== q{q} ===')
             code = encode_once(Path(seg_path), out, q, use_hw, args.container,
-                               resolution=args.resolution, audio=audio_tracks)
+                               resolution=args.resolution, audio=audio_tracks,
+                               audio_add=audio_add)
             if code != 0:
                 overall = code
                 break
@@ -299,6 +388,15 @@ def main() -> int:
                         help='Audio tracks to keep: 1-based comma-separated numbers '
                              'as shown in the plan output (e.g. 1,3). '
                              'Default: keep all audio tracks')
+    parser.add_argument('-d', '--add-audio-path', dest='add_audio_path',
+                        action=_AudioAddAction, metavar='FILE', default=[],
+                        help='External audio file to mux in as an extra track '
+                             '(re-encoded to Opus). Repeatable; each label binds '
+                             'to the nearest file in argument order')
+    parser.add_argument('--add-audio-label', dest='add_audio_label',
+                        action=_AudioAddAction, metavar='LABEL', default=[],
+                        help='Track title for the preceding/following '
+                             '--add-audio-path file')
     parser.add_argument('input', type=str, help='Source video file')
     parser.add_argument('output', nargs='?', default=None,
                         help='Target directory or output file path. The output keeps '
@@ -313,6 +411,16 @@ def main() -> int:
             audio_tracks = parse_audio_tracks(args.audio)
         except ValueError as exc:
             parser.error(str(exc))
+
+    try:
+        audio_add = pair_audio_add(getattr(args, 'audio_add_seq', []))
+    except ValueError as exc:
+        parser.error(str(exc))
+    for item in audio_add:
+        path = Path(item['path']).expanduser().resolve()
+        if not path.is_file():
+            parser.error(f"audio file not found: {path}")
+        item['path'] = str(path)
 
     if args.resolution:
         try:
@@ -345,7 +453,8 @@ def main() -> int:
         print('Warning: hardware VAAPI AV1 unavailable, falling back to software SVT-AV1')
 
     if args.test:
-        return run_test(file_input, args, use_hw, audio_tracks=audio_tracks)
+        return run_test(file_input, args, use_hw, audio_tracks=audio_tracks,
+                        audio_add=audio_add)
 
     output_path = resolve_output(file_input, args.output, args.container)
     if output_path == file_input:
@@ -353,7 +462,8 @@ def main() -> int:
         return 1
 
     return encode_once(file_input, output_path, args.quality, use_hw, args.container,
-                       resolution=args.resolution, audio=audio_tracks)
+                       resolution=args.resolution, audio=audio_tracks,
+                       audio_add=audio_add)
 
 
 if __name__ == '__main__':

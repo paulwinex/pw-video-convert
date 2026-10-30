@@ -71,6 +71,19 @@ async def create_task(
         raise HTTPException(
             status_code=400, detail=f"input file not found: {input_path}"
         )
+    audio_add: list[dict] = []
+    for item in payload.audio_add or []:
+        try:
+            add_path = _resolve_input(item.path, payload.remap_path)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400, detail=f"invalid audio file path: {exc}"
+            )
+        if not add_path.is_file():
+            raise HTTPException(
+                status_code=400, detail=f"audio file not found: {add_path}"
+            )
+        audio_add.append({"path": str(add_path), "label": item.label})
     output_val = (payload.output or "").strip()
     if not output_val:
         output_arg = str(DEFAULT_OUTPUT_DIR)
@@ -106,7 +119,8 @@ async def create_task(
             status_code=400, detail="output path resolves to the input file"
         )
 
-    uuid = await mgr.submit_convert(payload, input_path, output_path)
+    uuid = await mgr.submit_convert(payload, input_path, output_path,
+                                    audio_add=audio_add)
     return {"uuid": uuid, "status": "pending"}
 
 

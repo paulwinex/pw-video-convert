@@ -29,7 +29,8 @@ class StubManager:
         self.reorder_result = 2
         self.reorder_error: ValueError | None = None
 
-    async def submit_convert(self, body, input_path: Path, output_path: Path) -> str:
+    async def submit_convert(self, body, input_path: Path, output_path: Path,
+                             audio_add: list | None = None) -> str:
         self.calls.append((body, input_path, output_path))
         return "stub-uuid"
 
@@ -364,6 +365,79 @@ def test_audio_defaults_to_none(client, tmp_path):
     assert r.status_code == 200
     body, _, _ = client.stub.calls[0]
     assert body.audio is None
+
+
+def test_paused_flag_is_passed_through(client, tmp_path):
+    src = tmp_path / "src.mp4"
+    src.write_bytes(b"x")
+
+    r = client.post("/tasks", json={"input": str(src), "paused": True})
+
+    assert r.status_code == 200
+    body, _, _ = client.stub.calls[0]
+    assert body.paused is True
+
+
+def test_paused_defaults_to_false(client, tmp_path):
+    src = tmp_path / "src.mp4"
+    src.write_bytes(b"x")
+
+    r = client.post("/tasks", json={"input": str(src)})
+
+    assert r.status_code == 200
+    body, _, _ = client.stub.calls[0]
+    assert body.paused is False
+
+
+def test_audio_add_paths_are_resolved_with_remap(client, tmp_path, monkeypatch):
+    root = tmp_path / "root"
+    root.mkdir()
+    monkeypatch.setattr(routes.filesystem, "get_user_root", lambda: root)
+    srv_nas = tmp_path / "srv-nas"
+    srv_nas.mkdir()
+    monkeypatch.setattr(routes, "REMAP_PATH", srv_nas)
+    src = root / "movie.mkv"
+    src.write_bytes(b"x")
+    (srv_nas / "vo.mp3").write_bytes(b"x")
+    (root / "extra").mkdir()
+    (root / "extra" / "music.flac").write_bytes(b"x")
+
+    r = client.post("/tasks", json={
+        "input": "movie.mkv",
+        "remap_path": "/mnt/NAS",
+        "audio_add": [
+            {"path": "/mnt/NAS/vo.mp3", "label": "VO"},
+            {"path": "extra/music.flac", "label": "Music"},
+        ],
+    })
+
+    assert r.status_code == 200
+    body, _, _ = client.stub.calls[0]
+    assert body.audio_add[0].label == "VO"
+    assert body.audio_add[1].label == "Music"
+
+
+def test_audio_add_missing_file_is_400(client, tmp_path):
+    src = tmp_path / "src.mp4"
+    src.write_bytes(b"x")
+
+    r = client.post("/tasks", json={
+        "input": str(src),
+        "audio_add": [{"path": str(tmp_path / "nope.mp3"), "label": "VO"}],
+    })
+
+    assert r.status_code == 400
+    assert "audio file not found" in r.json()["detail"]
+    assert client.stub.calls == []
+
+
+@pytest.mark.parametrize("bad", [
+    [{"path": "/tmp/a.mp3", "label": "  "}],  # blank label
+    [{"label": "VO"}],                        # no path
+])
+def test_bad_audio_add_is_422(client, bad):
+    r = client.post("/tasks", json={"input": "/tmp/x.mp4", "audio_add": bad})
+    assert r.status_code == 422
 
 
 def test_relative_input_resolves_under_user_root(client, tmp_path, monkeypatch):

@@ -1,4 +1,7 @@
 from pathlib import Path
+import subprocess
+
+import pytest
 
 import app.core.config  # noqa: F401  # installs pw-video-convert on sys.path
 from pw_video_convert import cli
@@ -137,3 +140,43 @@ def test_encode_once_keeps_all_audio_tracks_by_default(audio_clip: Path, tmp_pat
 
     assert code == 0
     assert len(probe.get_audio_tracks(str(out))) == 2
+
+
+@pytest.fixture
+def external_audio(tmp_path: Path) -> Path:
+    path = tmp_path / "external.wav"
+    subprocess.run(
+        [
+            "ffmpeg", "-y",
+            "-f", "lavfi", "-i", "sine=duration=5:frequency=660",
+            "-c:a", "pcm_s16le",
+            str(path),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    return path
+
+
+def test_encode_once_adds_external_audio_with_label(
+    audio_clip: Path, external_audio: Path, tmp_path: Path, capsys
+):
+    from pw_video_convert import probe
+
+    out = tmp_path / "withext.mkv"
+    code = cli.encode_once(
+        audio_clip, out, q=10, use_hw=False, container="mkv",
+        progress_fn=lambda fraction, seconds_left: None,
+        audio=[1],
+        audio_add=[{"path": str(external_audio), "label": "External VO"}],
+    )
+
+    captured = capsys.readouterr()
+    assert code == 0
+    assert "Audio add 1: [External VO]" in captured.out
+
+    tracks = probe.get_audio_tracks(str(out))
+    assert len(tracks) == 2
+    assert tracks[0]["title"] == "Original"       # kept source track
+    assert tracks[1]["title"] == "External VO"    # added external track
+    assert tracks[1]["codec"] == "opus"

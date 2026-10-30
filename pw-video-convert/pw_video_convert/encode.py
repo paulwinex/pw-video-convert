@@ -43,6 +43,16 @@ def audio_target_bitrate(channels: int, source_bitrate: Optional[int]) -> int:
     return min(source_bitrate, max(floor, round(source_bitrate * 0.35)), OPUS_MAX_BITRATE)
 
 
+def _opus_params(channels: int, source_bitrate: Optional[int]) -> Tuple[int, str, int]:
+    """Resolve channels, Vorbis layout and bitrate for a libopus re-encode."""
+    layout = OPUS_LAYOUTS.get(channels)
+    if layout is None:
+        # libopus has no Vorbis layout above 8 channels; downmix.
+        channels = 2
+        layout = OPUS_LAYOUTS[channels]
+    return channels, layout, audio_target_bitrate(channels, source_bitrate)
+
+
 def build_audio_plan(info: dict, audio: Optional[List[int]] = None) -> List[dict]:
     """Plan audio tracks; `audio` is a list of 0-based ordinals to keep (None = all)."""
     if audio is not None:
@@ -64,13 +74,9 @@ def build_audio_plan(info: dict, audio: Optional[List[int]] = None) -> List[dict
             layout = None
         else:
             action = 'opus'
-            channels = track['channels']
-            layout = OPUS_LAYOUTS.get(channels)
-            if layout is None:
-                # libopus has no Vorbis layout above 8 channels; downmix.
-                channels = 2
-                layout = OPUS_LAYOUTS[channels]
-            bitrate = audio_target_bitrate(channels, track['stream_bitrate'])
+            channels, layout, bitrate = _opus_params(
+                track['channels'], track['stream_bitrate']
+            )
         plan.append({
             'ordinal': ordinal,
             'codec': track['codec'],
@@ -111,6 +117,7 @@ def build_encode_cmd(
     container: str,
     resolution: Optional[Union[str, List[int]]] = None,
     audio: Optional[List[int]] = None,
+    audio_add: Optional[List[dict]] = None,
 ) -> List[str]:
     video = info['video']
     plan = frame.plan_video(video['width'], video['height'], resolution)
@@ -120,6 +127,8 @@ def build_encode_cmd(
     if hw:
         cmd.extend(['-vaapi_device', '/dev/dri/renderD128'])
     cmd.extend(['-i', file_input])
+    for item in (audio_add or []):
+        cmd.extend(['-i', item['path']])
 
     if hw:
         cmd.extend(['-vf', ','.join(filters + [_hw_vf(video['bit_depth'])])])
@@ -154,6 +163,23 @@ def build_encode_cmd(
                 f'-ac:a:{out_index}', str(track['channels']),
                 f'-ch_layout:a:{out_index}', track['layout'],
             ])
+
+    # External audio files: each is an extra -i (input index i+1); its first
+    # audio stream is re-encoded to opus and titled with its label.
+    for i, item in enumerate(audio_add or []):
+        input_index = i + 1
+        out_index = len(audio_plan) + i
+        channels, layout, bitrate = _opus_params(
+            item['channels'], item.get('stream_bitrate')
+        )
+        cmd.extend(['-map', f'{input_index}:a:0'])
+        cmd.extend([
+            f'-c:a:{out_index}', 'libopus',
+            f'-b:a:{out_index}', str(bitrate),
+            f'-ac:a:{out_index}', str(channels),
+            f'-ch_layout:a:{out_index}', layout,
+            f'-metadata:s:a:{out_index}', f'title={item["label"]}',
+        ])
 
     subs_kept, _ = build_subtitle_plan(info, container)
     for sub in subs_kept:
@@ -244,10 +270,11 @@ def run_encode(
     cancel_event: Callable[[], bool],
     resolution: Optional[Union[str, List[int]]] = None,
     audio: Optional[List[int]] = None,
+    audio_add: Optional[List[dict]] = None,
 ) -> Optional[str]:
     cmd = build_encode_cmd(
         file_input, file_output, info, quality_value, hw, preset, container,
-        resolution, audio,
+        resolution, audio, audio_add,
     )
     print(f'Command: {shlex.join(cmd)}')
     _, error = get_progress(cmd, output_fn, info['frame_count'], cancel_event)

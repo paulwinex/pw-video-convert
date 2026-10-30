@@ -4,6 +4,19 @@ from typing import Literal, Optional
 from pydantic import BaseModel, Field, field_validator
 
 
+class AudioAdd(BaseModel):
+    path: str
+    label: str = "External audio"
+
+    @field_validator("label")
+    @classmethod
+    def _label_not_empty(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("audio label must not be empty")
+        return value
+
+
 class TaskCreate(BaseModel):
     input: str
     output: str | None = None
@@ -12,6 +25,8 @@ class TaskCreate(BaseModel):
     software: bool = False
     resolution: list[int] | None = Field(default=None, min_length=2, max_length=2)
     audio: list[int] | None = None
+    audio_add: list[AudioAdd] | None = None
+    paused: bool = False
     remap_path: str = None
 
     @field_validator("resolution")

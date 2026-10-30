@@ -9,7 +9,7 @@ import urllib.request
 from PyQt5.QtWidgets import (
     QApplication, QDialog, QVBoxLayout, QHBoxLayout, QLabel,
     QListWidget, QSlider, QLineEdit, QPushButton, QFileDialog, QComboBox,
-    QCheckBox, QMessageBox
+    QCheckBox, QInputDialog, QMessageBox
 )
 from PyQt5.QtCore import Qt
 
@@ -136,13 +136,19 @@ def track_label(track: dict) -> str:
 
 
 class AudioTracksDialog(QDialog):
-    """Checkbox list of a file's audio tracks; all checked by default."""
+    """Checkbox list of a file's audio tracks; all checked by default.
 
-    def __init__(self, file_name: str, tracks: list, selected: list, parent=None):
+    Also allows attaching external audio files, each with a user-supplied
+    label; they are muxed in as extra Opus tracks by the converter.
+    """
+
+    def __init__(self, file_name: str, tracks: list, selected: list,
+                 added: list = None, parent=None):
         super().__init__(parent)
         self.setWindowTitle(f"Audio tracks — {file_name}")
         self._boxes = []
         self._ok = None
+        self._added = [dict(item) for item in (added or [])]
 
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel(f"Select audio tracks to keep in {file_name}:"))
@@ -154,6 +160,21 @@ class AudioTracksDialog(QDialog):
             self._boxes.append((track.get("track"), box))
             layout.addWidget(box)
 
+        # --- External audio files ---
+        layout.addWidget(QLabel("External audio files (added as Opus tracks):"))
+        self.add_list = QListWidget()
+        layout.addWidget(self.add_list)
+        a_btns = QHBoxLayout()
+        add_btn = QPushButton("Add audio file\u2026")
+        add_btn.clicked.connect(self.on_add_file)
+        remove_btn = QPushButton("Remove selected")
+        remove_btn.clicked.connect(self.on_remove_file)
+        a_btns.addWidget(add_btn)
+        a_btns.addWidget(remove_btn)
+        a_btns.addStretch(1)
+        layout.addLayout(a_btns)
+        self._refresh_add_list()
+
         buttons = QHBoxLayout()
         buttons.addStretch(1)
         cancel = QPushButton("Cancel")
@@ -164,6 +185,37 @@ class AudioTracksDialog(QDialog):
         buttons.addWidget(self._ok)
         layout.addLayout(buttons)
         self._update_ok()
+
+    def _refresh_add_list(self):
+        self.add_list.clear()
+        for item in self._added:
+            self.add_list.addItem(f"[{item['label']}] {os.path.basename(item['path'])}")
+
+    def on_add_file(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select audio file", os.path.dirname(self._added[-1]["path"])
+            if self._added else os.path.expanduser("~")
+        )
+        if not path:
+            return
+        name = os.path.basename(path)
+        label, ok = QInputDialog.getText(
+            self, "Track label", f"How to label the audio track from {name}?:"
+        )
+        if not ok:
+            return
+        label = label.strip() or f"External audio {len(self._added) + 1}"
+        self._added.append({"path": os.path.abspath(path), "label": label})
+        self._refresh_add_list()
+
+    def on_remove_file(self):
+        row = self.add_list.currentRow()
+        if 0 <= row < len(self._added):
+            del self._added[row]
+            self._refresh_add_list()
+
+    def added(self) -> list:
+        return [dict(item) for item in self._added]
 
     def _update_ok(self, *args):
         if self._ok is not None:
@@ -179,8 +231,9 @@ class ConvertDialog(QDialog):
         self.files = files
         self.abs_files = [os.path.abspath(f) for f in files]
         # per-file audio selection: {abs_path: [1-based track numbers]};
-        # missing entry = keep all tracks
+        # missing entry = keep all tracks. audio_add: {abs_path: [{path,label}]}
         self.audio_sel = {}
+        self.audio_add = {}
         self.track_cache = {}
         self.setWindowTitle(f"PW Convert [{DEFAULT_BASE_URL}]")
         self.resize(600, 400)
@@ -250,6 +303,8 @@ class ConvertDialog(QDialog):
             self._update_audio_summary()
 
         # --- Submit ---
+        self.paused_cb = QCheckBox("Create paused")
+        layout.addWidget(self.paused_cb)
         self.submit_btn = QPushButton("Submit")
         self.submit_btn.clicked.connect(self.on_submit)
         layout.addWidget(self.submit_btn)
@@ -272,6 +327,9 @@ class ConvertDialog(QDialog):
         else:
             joined = ",".join(str(n) for n in sel)
             text = f"{joined} (of {total})" if total else joined
+        adds = self.audio_add.get(path, [])
+        if adds:
+            text += f" +{len(adds)} ext"
         self.audio_summary.setText(text)
 
     def on_audio_tracks(self):
@@ -296,13 +354,17 @@ class ConvertDialog(QDialog):
             )
             return
         current = self.audio_sel.get(path) or [t["track"] for t in tracks]
-        dlg = AudioTracksDialog(os.path.basename(path), tracks, current, self)
+        dlg = AudioTracksDialog(
+            os.path.basename(path), tracks, current,
+            added=self.audio_add.get(path, []), parent=self,
+        )
         if dlg.exec_() == QDialog.Accepted:
             sel = dlg.selected()
             if sel and len(sel) < len(tracks):
                 self.audio_sel[path] = sel
             else:
                 self.audio_sel.pop(path, None)
+            self.audio_add[path] = dlg.added()
             self._update_audio_summary()
 
 
@@ -331,6 +393,11 @@ class ConvertDialog(QDialog):
             audio_sel = self.audio_sel.get(os.path.abspath(f))
             if audio_sel:
                 payload["audio"] = audio_sel
+            audio_add = self.audio_add.get(os.path.abspath(f), [])
+            if audio_add:
+                payload["audio_add"] = audio_add
+            if self.paused_cb.isChecked():
+                payload["paused"] = True
             try:
                 result = add_task(base_url, payload)
                 print(
