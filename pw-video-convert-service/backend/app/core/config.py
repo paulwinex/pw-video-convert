@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 
@@ -10,7 +11,9 @@ LOGS_DIR.mkdir(exist_ok=True)
 
 FRONTEND_DIST = (BASE_DIR.parent / "frontend" / "dist").resolve()
 
-REMAP_PATH=Path('~/NAS').expanduser()
+# Path prefix on THIS host that replaces the client's local prefix
+# (payload `remap_path`, e.g. "/mnt/NAS" on submitter machines).
+REMAP_PATH = Path(os.environ.get("REMAP_PATH", "~/NAS")).expanduser()
 DEFAULT_OUTPUT_DIR = Path("~/convert").expanduser()
 DEFAULT_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 

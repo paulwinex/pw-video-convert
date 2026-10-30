@@ -20,11 +20,14 @@ class StubManager:
         self.pause_pending_calls = 0
         self.start_paused_calls = 0
         self.bulk_delete_calls = []
+        self.reorder_calls = []
         self.pause_result = True
         self.start_result = True
         self.stop_result = True
         self.pause_pending_result = 0
         self.bulk_delete_result = 0
+        self.reorder_result = 2
+        self.reorder_error: ValueError | None = None
 
     async def submit_convert(self, body, input_path: Path, output_path: Path) -> str:
         self.calls.append((body, input_path, output_path))
@@ -60,6 +63,12 @@ class StubManager:
     async def delete_by_status(self, statuses, with_result: bool = False) -> int:
         self.bulk_delete_calls.append((tuple(statuses), with_result))
         return self.bulk_delete_result
+
+    async def reorder(self, task_uuids):
+        self.reorder_calls.append(list(task_uuids))
+        if self.reorder_error is not None:
+            raise self.reorder_error
+        return self.reorder_result
 
 
 @pytest.fixture
@@ -329,6 +338,34 @@ def test_resolution_defaults_to_none(client, tmp_path):
     assert body.resolution is None
 
 
+def test_audio_selection_is_normalized_and_accepted(client, tmp_path):
+    src = tmp_path / "src.mp4"
+    src.write_bytes(b"x")
+
+    r = client.post("/tasks", json={"input": str(src), "audio": [3, 1, 3]})
+
+    assert r.status_code == 200
+    body, _, _ = client.stub.calls[0]
+    assert body.audio == [1, 3]
+
+
+@pytest.mark.parametrize("bad", [[], [0], [-1], ["a"], "1,3", 1])
+def test_bad_audio_selection_is_422(client, bad):
+    r = client.post("/tasks", json={"input": "/tmp/x.mp4", "audio": bad})
+    assert r.status_code == 422
+
+
+def test_audio_defaults_to_none(client, tmp_path):
+    src = tmp_path / "src.mp4"
+    src.write_bytes(b"x")
+
+    r = client.post("/tasks", json={"input": str(src)})
+
+    assert r.status_code == 200
+    body, _, _ = client.stub.calls[0]
+    assert body.audio is None
+
+
 def test_relative_input_resolves_under_user_root(client, tmp_path, monkeypatch):
     root = tmp_path / "root"
     (root / "sub").mkdir(parents=True)
@@ -371,6 +408,29 @@ def test_relative_input_missing_under_user_root_is_400(
     assert r.status_code == 400
     assert "input file not found" in r.json()["detail"]
     assert client.stub.calls == []
+
+
+def test_reorder_forwards_uuids(client):
+    r = client.post("/tasks/reorder", json={"uuids": ["b", "a", "c"]})
+
+    assert r.status_code == 200
+    assert r.json() == {"count": 2}
+    assert client.stub.reorder_calls == [["b", "a", "c"]]
+
+
+def test_reorder_conflict_when_task_not_pending(client):
+    client.stub.reorder_error = ValueError("not a pending task: a")
+
+    r = client.post("/tasks/reorder", json={"uuids": ["a"]})
+
+    assert r.status_code == 409
+    assert "not a pending task" in r.json()["detail"]
+
+
+def test_reorder_empty_list_is_422(client):
+    r = client.post("/tasks/reorder", json={"uuids": []})
+
+    assert r.status_code == 422
 
 
 def test_delete_defaults_to_keeping_result(client):

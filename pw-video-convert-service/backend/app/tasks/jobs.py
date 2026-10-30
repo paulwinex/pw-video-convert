@@ -37,6 +37,7 @@ def convert_job(
     container: str,
     software: bool,
     resolution: list[int] | None = None,
+    audio: list[int] | None = None,
 ) -> None:
     file_input = Path(input)
     output_path = Path(output)
@@ -75,6 +76,7 @@ def convert_job(
             res_txt = "source"
         else:
             res_txt = f"{resolution[0]}x{resolution[1]}"
+        audio_txt = ",".join(str(n) for n in audio) if audio is not None else "all"
         print("--- launch params ---")
         print(f"input: {file_input}")
         print(f"output: {output_path}")
@@ -82,6 +84,7 @@ def convert_job(
         print(f"quality: {quality}")
         print(f"software: {str(software).lower()}")
         print(f"resolution: {res_txt}")
+        print(f"audio tracks: {audio_txt}")
         print(f"encoder: {encoder}")
         print("---")
 
@@ -99,6 +102,7 @@ def convert_job(
             progress_fn=on_progress,
             cancel_fn=lambda: False,
             resolution=resolution,
+            audio=audio,
         )
 
         if code == 0:

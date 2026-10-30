@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from peewee import DoesNotExist
+from peewee import DoesNotExist, fn
 
 from app.api.schemas import TaskCreate
 from app.core.db import db
@@ -23,6 +23,9 @@ logger = get_logger("task_manager")
 RESUMABLE_STATUSES = ("pending", "running")
 RESTARTABLE_STATUSES = ("paused", "canceled")
 TERMINAL_STATUSES = ("completed", "failed", "canceled")
+
+# null queue_order sorts after every explicitly ordered pending task
+QUEUE_ORDER_BIG = 1 << 40
 
 
 @dataclass
@@ -46,6 +49,17 @@ def _load_params(task: Task) -> Optional[Dict[str, Any]]:
     return params
 
 
+def _task_dict_sort_key(item: dict) -> tuple:
+    """Display/queue order: running first, then pending by queue_order
+    (next to run first), then everything else newest first."""
+    if item["status"] == "running":
+        return (0, 0, -item["id"])
+    if item["status"] == "pending":
+        order = item["queue_order"] if item["queue_order"] is not None else QUEUE_ORDER_BIG
+        return (1, order, item["id"])
+    return (2, 0, -item["id"])
+
+
 def _remove_file(path: Optional[str]) -> None:
     if not path:
         return
@@ -67,7 +81,10 @@ def unfinished_specs() -> list:
     rows = (
         Task.select()
         .where(Task.status.in_(RESUMABLE_STATUSES))
-        .order_by(Task.id.asc())
+        .order_by(
+            fn.COALESCE(Task.queue_order, QUEUE_ORDER_BIG).asc(),
+            Task.id.asc(),
+        )
     )
     for t in rows:
         params = _load_params(t)
@@ -132,6 +149,7 @@ class TaskManager:
             "container": body.container,
             "software": body.software,
             "resolution": body.resolution,
+            "audio": body.audio,
         }
         name = input_path.name
         spec = JobSpec(uuid=job_uuid, name=name, params=params)
@@ -146,6 +164,7 @@ class TaskManager:
                 progress=0,
                 params=json.dumps(params),
                 data=data,
+                queue_order=self._next_queue_order(),
                 created_at=datetime.datetime.utcnow(),
             )
 
@@ -159,6 +178,69 @@ class TaskManager:
             return
         self._queued.add(spec.uuid)
         await self._submit_q.put(spec)
+
+    @staticmethod
+    def _next_queue_order() -> int:
+        max_order = (
+            Task.select(fn.MAX(Task.queue_order))
+            .where(Task.status == "pending")
+            .scalar()
+        )
+        return (max_order or -1) + 1
+
+    async def reorder(self, task_uuids: list) -> int:
+        """Persist a new execution order for pending tasks.
+
+        `task_uuids` is the desired order; pending tasks missing from it keep
+        their relative order after the listed ones. Raises ValueError for
+        unknown or non-pending uuids.
+        """
+        rows = list(Task.select().where(Task.status == "pending"))
+        by_uuid = {t.uuid: t for t in rows}
+        ordered: list = []
+        seen: set = set()
+        for u in task_uuids:
+            t = by_uuid.get(u)
+            if t is None:
+                raise ValueError(f"not a pending task: {u}")
+            if u in seen:
+                continue
+            seen.add(u)
+            ordered.append(t)
+        final = ordered + [t for t in rows if t.uuid not in seen]
+
+        with db.atomic():
+            for i, t in enumerate(final):
+                if t.queue_order != i:
+                    t.queue_order = i
+                    t.save()
+
+        self._rebuild_queue()
+        logger.info("reordered %d pending task(s)", len(final))
+        return len(final)
+
+    def _rebuild_queue(self) -> None:
+        """Requeue in-memory specs to match the persisted queue_order.
+
+        Draining and refilling without awaits makes the swap atomic for the
+        dispatcher loop, which may be waiting on the queue at the same time.
+        """
+        order = {
+            t.uuid: t.queue_order if t.queue_order is not None else QUEUE_ORDER_BIG
+            for t in Task.select(Task.uuid, Task.queue_order).where(
+                Task.status == "pending"
+            )
+        }
+        specs: list = []
+        while True:
+            try:
+                specs.append(self._submit_q.get_nowait())
+            except asyncio.QueueEmpty:
+                break
+        specs.sort(key=lambda s: (order.get(s.uuid, QUEUE_ORDER_BIG), s.uuid))
+        self._queued = {s.uuid for s in specs}
+        for s in specs:
+            self._submit_q.put_nowait(s)
 
     async def resume(self) -> None:
         """Re-queue unfinished tasks (pending/running) after a restart."""
@@ -218,6 +300,7 @@ class TaskManager:
             t.result = None
             t.started_at = None
             t.finished_at = None
+            t.queue_order = self._next_queue_order()
             drop_task_data(t, "output_size")
             t.save()
         await self._enqueue(JobSpec(uuid=t.uuid, name=t.name, params=params))
@@ -263,7 +346,7 @@ class TaskManager:
 
     async def list_tasks(self):
         q = Task.select().order_by(Task.id.desc())
-        return [t.to_dict() for t in q]
+        return sorted([t.to_dict() for t in q], key=_task_dict_sort_key)
 
     async def delete_task(self, task_uuid: str, with_result: bool = False) -> bool:
         try:
@@ -304,9 +387,9 @@ class TaskManager:
         """Re-queue every restartable (paused/canceled) task."""
         uuids = [
             t.uuid
-            for t in Task.select(Task.uuid).where(
-                Task.status.in_(RESTARTABLE_STATUSES)
-            )
+            for t in Task.select(Task.uuid)
+            .where(Task.status.in_(RESTARTABLE_STATUSES))
+            .order_by(Task.id.asc())
         ]
         started = 0
         for u in uuids:

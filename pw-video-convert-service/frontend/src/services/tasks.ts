@@ -11,6 +11,7 @@ export interface Task {
     | 'completed'
     | 'failed'
     | 'canceled';
+  queue_order: number | null;
   progress: number;
   error: string | null;
   result: string | null;
@@ -39,11 +40,26 @@ type StreamPayload = SnapshotPayload | UpdatePayload;
 export const sseConnected = ref(false);
 export const tasks = ref<Task[]>([]);
 
+// Mirror of the backend order: running first, then pending by queue_order
+// (next to run first), then everything else newest first.
+const BIG = Number.MAX_SAFE_INTEGER;
+
+export function compareTasks(a: Task, b: Task): number {
+  const key = (t: Task): [number, number, number] => {
+    if (t.status === 'running') return [0, 0, -t.id];
+    if (t.status === 'pending')
+      return [1, t.queue_order ?? BIG, t.id];
+    return [2, 0, -t.id];
+  };
+  const [ka, kb] = [key(a), key(b)];
+  return ka[0] - kb[0] || ka[1] - kb[1] || ka[2] - kb[2];
+}
+
 let es: EventSource | null = null;
 
 function handleMessage(payload: StreamPayload): void {
   if (payload.type === 'snapshot') {
-    tasks.value = payload.items;
+    tasks.value = [...payload.items].sort(compareTasks);
     return;
   }
   const map = new Map(tasks.value.map((t) => [t.uuid, t]));
@@ -53,7 +69,7 @@ function handleMessage(payload: StreamPayload): void {
   for (const item of payload.items) {
     map.set(item.uuid, { ...map.get(item.uuid), ...item });
   }
-  tasks.value = [...map.values()].sort((a, b) => b.id - a.id);
+  tasks.value = [...map.values()].sort(compareTasks);
 }
 
 export function startTaskStream(): void {
@@ -79,7 +95,54 @@ export function stopTaskStream(): void {
 export async function fetchTasks(): Promise<void> {
   const res = await fetch('/tasks');
   if (!res.ok) throw new Error(`GET /tasks: ${res.status}`);
-  tasks.value = (await res.json()) as Task[];
+  tasks.value = ((await res.json()) as Task[]).sort(compareTasks);
+}
+
+export async function reorderTasks(uuids: string[]): Promise<number> {
+  const res = await fetch('/tasks/reorder', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ uuids }),
+  });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as
+      | { detail?: string }
+      | null;
+    throw new Error(
+      typeof body?.detail === 'string'
+        ? body.detail
+        : `POST /tasks/reorder: ${res.status}`
+    );
+  }
+  return ((await res.json()) as { count: number }).count;
+}
+
+export interface AudioTrack {
+  track: number;
+  index: number | null;
+  codec: string;
+  channels: number;
+  language: string | null;
+  title: string | null;
+  stream_bitrate: number | null;
+}
+
+export async function probeFile(
+  input: string,
+  remapPath?: string | null
+): Promise<AudioTrack[]> {
+  const params = new URLSearchParams({ path: input });
+  if (remapPath) params.set('remap_path', remapPath);
+  const res = await fetch(`/probe?${params.toString()}`);
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as
+      | { detail?: string }
+      | null;
+    throw new Error(
+      typeof body?.detail === 'string' ? body.detail : `GET /probe: ${res.status}`
+    );
+  }
+  return ((await res.json()) as { audio: AudioTrack[] }).audio;
 }
 
 export interface TaskCreatePayload {
@@ -89,6 +152,7 @@ export interface TaskCreatePayload {
   container?: 'mkv' | 'mp4';
   software?: boolean;
   resolution?: [number, number];
+  audio?: number[];
   remap_path?: string | null;
 }
 

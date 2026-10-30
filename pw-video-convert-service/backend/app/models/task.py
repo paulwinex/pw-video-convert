@@ -19,6 +19,9 @@ class Task(Model):
     id = AutoField()
     uuid = CharField(unique=True, index=True, max_length=64)
     name = CharField(max_length=255, default="task")
+    # Position among pending tasks (0 = next to run); null for legacy rows
+    # and for everything that already left the queue.
+    queue_order = IntegerField(null=True)
     status = CharField(
         max_length=16,
         default="pending",
@@ -59,6 +62,7 @@ class Task(Model):
             "uuid": self.uuid,
             "name": self.name,
             "status": self.status,
+            "queue_order": self.queue_order,
             "progress": int(self.progress or 0),
             "error": self.error,
             "result": self.result,

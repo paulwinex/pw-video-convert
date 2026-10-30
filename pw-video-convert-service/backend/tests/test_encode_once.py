@@ -90,3 +90,50 @@ def test_encode_once_reports_executed_command(
     assert "ffmpeg" in captured.out
     assert str(tiny_clip) in captured.out
     assert str(out) in captured.out
+
+
+def test_get_audio_tracks_reports_1based_tracks_with_tags(audio_clip: Path):
+    from pw_video_convert import probe
+
+    tracks = probe.get_audio_tracks(str(audio_clip))
+    assert [t["track"] for t in tracks] == [1, 2]
+    assert tracks[0]["language"] == "rus"
+    assert tracks[0]["title"] == "Original"
+    assert tracks[1]["language"] == "eng"
+    assert tracks[1]["title"] == "Commentary"
+
+
+def test_encode_once_keeps_only_selected_audio_track(
+    audio_clip: Path, tmp_path: Path, capsys
+):
+    from pw_video_convert import probe
+
+    out = tmp_path / "selected.mkv"
+    code = cli.encode_once(
+        audio_clip, out, q=10, use_hw=False, container="mkv",
+        progress_fn=lambda fraction, seconds_left: None,
+        audio=[2],
+    )
+
+    captured = capsys.readouterr()
+    assert code == 0
+    assert "a2 [eng, Commentary] aac->copy" in captured.out
+    assert "dropped: a1 [rus, Original] aac" in captured.out
+
+    tracks = probe.get_audio_tracks(str(out))
+    assert len(tracks) == 1
+    assert tracks[0]["title"] == "Commentary"
+    assert tracks[0]["language"] == "eng"
+
+
+def test_encode_once_keeps_all_audio_tracks_by_default(audio_clip: Path, tmp_path: Path):
+    from pw_video_convert import probe
+
+    out = tmp_path / "all.mkv"
+    code = cli.encode_once(
+        audio_clip, out, q=10, use_hw=False, container="mkv",
+        progress_fn=lambda fraction, seconds_left: None,
+    )
+
+    assert code == 0
+    assert len(probe.get_audio_tracks(str(out))) == 2

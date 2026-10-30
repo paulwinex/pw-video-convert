@@ -106,8 +106,26 @@ def encoder_for(q: int, use_hw: bool, source_codec: Optional[str] = None) -> Tup
     return crf, preset, f'libsvtav1 preset {preset} crf {crf} (software)'
 
 
+def parse_audio_tracks(value: str) -> List[int]:
+    """Parse '1,3,4' into sorted unique 1-based audio track numbers."""
+    try:
+        numbers = [int(part.strip()) for part in value.split(',')]
+    except ValueError:
+        raise ValueError(f'invalid --audio value {value!r} (expected e.g. 1,3,4)')
+    if not numbers or any(n < 1 for n in numbers):
+        raise ValueError(f'invalid --audio value {value!r} (track numbers start at 1)')
+    return sorted(set(numbers))
+
+
+def _audio_track_label(ordinal: int, track: dict) -> str:
+    tags = [t for t in (track.get('language'), track.get('title')) if t]
+    suffix = f' [{", ".join(tags)}]' if tags else ''
+    return f'a{ordinal + 1}{suffix}'
+
+
 def print_plan(info: dict, encoder_name: str, container: str,
-               resolution: Optional[Union[str, List[int]]] = None) -> None:
+               resolution: Optional[Union[str, List[int]]] = None,
+               audio: Optional[List[int]] = None) -> None:
     print(f'Input: {info["source"]} ({fmt_size(info["size"])})')
     video = info['video']
     print(f'Source: {video["width"]}x{video["height"]}, {video["bit_depth"]}-bit'
@@ -120,15 +138,25 @@ def print_plan(info: dict, encoder_name: str, container: str,
               f'{plan["final"][0]}x{plan["final"][1]} aligned for AV1{box_note}')
     print(f'Encoder: {encoder_name}')
 
-    audio_plan = encode.build_audio_plan(info)
+    audio_plan = encode.build_audio_plan(info, audio)
     subs_kept, subs_dropped = encode.build_subtitle_plan(info, container)
 
     audio_summary = ', '.join(
-        f'a{t["ordinal"]} {t["codec"]}->copy' if t['action'] == 'copy'
-        else f'a{t["ordinal"]} {t["codec"]}->opus {t["bitrate"] // 1000}k ({t["channels"]}ch)'
+        f'{_audio_track_label(t["ordinal"], info["audio"][t["ordinal"]])} '
+        f'{t["codec"]}->copy'
+        if t['action'] == 'copy'
+        else f'{_audio_track_label(t["ordinal"], info["audio"][t["ordinal"]])} '
+             f'{t["codec"]}->opus {t["bitrate"] // 1000}k ({t["channels"]}ch)'
         for t in audio_plan
     )
-    print(f'Audio: {audio_summary or "none"}')
+    kept_ordinals = {t['ordinal'] for t in audio_plan}
+    audio_dropped = [
+        _audio_track_label(ordinal, track) + f' {track["codec"]}'
+        for ordinal, track in enumerate(info['audio'])
+        if ordinal not in kept_ordinals
+    ]
+    print(f'Audio: {audio_summary or "none"}'
+          + (f'; dropped: {", ".join(audio_dropped)}' if audio_dropped else ''))
     subs_summary = ', '.join(
         f's{s["ordinal"]} {s["codec"]}->{"copy" if container == "mkv" else "mov_text"}'
         for s in subs_kept
@@ -142,7 +170,11 @@ def encode_once(file_input: Path, output_path: Path, q: int,
                 use_hw: bool, container: str,
                 progress_fn: Optional[Callable[[float, Optional[int]], None]] = None,
                 cancel_fn: Optional[Callable[[], bool]] = None,
-                resolution: Optional[Union[str, List[int]]] = None) -> int:
+                resolution: Optional[Union[str, List[int]]] = None,
+                audio: Optional[List[int]] = None) -> int:
+    # `audio` holds user-facing 1-based track numbers; encode layer uses 0-based
+    # ordinals matching `-map 0:a:N`.
+    audio_ordinals = [n - 1 for n in audio] if audio is not None else None
     info = probe.get_media_info(str(file_input))
     info['source'] = str(file_input)
     source_size = info['size']
@@ -151,7 +183,7 @@ def encode_once(file_input: Path, output_path: Path, q: int,
     quality_value, preset, encoder_name = encoder_for(q, use_hw, source_codec)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    print_plan(info, encoder_name, container, resolution)
+    print_plan(info, encoder_name, container, resolution, audio=audio_ordinals)
 
     on_progress = progress_fn if progress_fn is not None else make_progress_printer()
     is_cancelled = cancel_fn if cancel_fn is not None else (lambda: CANCELLED)
@@ -163,6 +195,7 @@ def encode_once(file_input: Path, output_path: Path, q: int,
         str(file_input), str(output_path), info, quality_value,
         use_hw, preset, container, on_progress, is_cancelled,
         resolution=resolution,
+        audio=audio_ordinals,
     )
 
     print()
@@ -187,7 +220,8 @@ def encode_once(file_input: Path, output_path: Path, q: int,
     return 0
 
 
-def run_test(file_input: Path, args, use_hw: bool) -> int:
+def run_test(file_input: Path, args, use_hw: bool,
+             audio_tracks: Optional[List[int]] = None) -> int:
     info = probe.get_media_info(str(file_input))
     target_dir = (Path(args.output).expanduser().resolve()
                   if args.output else file_input.parent)
@@ -220,7 +254,7 @@ def run_test(file_input: Path, args, use_hw: bool) -> int:
             out = target_dir / f'{file_input.stem}.q{q}.{ext}'
             print(f'\n=== q{q} ===')
             code = encode_once(Path(seg_path), out, q, use_hw, args.container,
-                               resolution=args.resolution)
+                               resolution=args.resolution, audio=audio_tracks)
             if code != 0:
                 overall = code
                 break
@@ -238,7 +272,7 @@ def main() -> int:
         description=(
             'Re-encode video to AV1 with a quality scale q=1..10. '
             'q=10 is near-transparent (film grain preserved); lower levels trade '
-            'quality for size. Framerate, all audio tracks and subtitles are '
+            'quality for size. Framerate, selected audio tracks and subtitles are '
             'preserved. Resolution is kept unless --resolution is given, and the '
             'frame is always aligned to an AV1-supported size with centered black '
             'bars. Audio in non-optimal codecs is re-encoded to Opus at '
@@ -261,6 +295,10 @@ def main() -> int:
                         help='Target frame size, e.g. 1920x1080. The source is fitted '
                              'into it without upscaling and centered with black bars; '
                              'the result is always aligned to an AV1-supported size')
+    parser.add_argument('-a', '--audio', type=str, default=None, metavar='1,3,4',
+                        help='Audio tracks to keep: 1-based comma-separated numbers '
+                             'as shown in the plan output (e.g. 1,3). '
+                             'Default: keep all audio tracks')
     parser.add_argument('input', type=str, help='Source video file')
     parser.add_argument('output', nargs='?', default=None,
                         help='Target directory or output file path. The output keeps '
@@ -268,6 +306,13 @@ def main() -> int:
                              'suffix is added if it would overwrite the input.')
 
     args = parser.parse_args()
+
+    audio_tracks = None
+    if args.audio:
+        try:
+            audio_tracks = parse_audio_tracks(args.audio)
+        except ValueError as exc:
+            parser.error(str(exc))
 
     if args.resolution:
         try:
@@ -281,17 +326,26 @@ def main() -> int:
         return 1
 
     try:
-        probe.get_media_info(str(file_input))
+        info = probe.get_media_info(str(file_input))
     except (subprocess.CalledProcessError, ValueError) as e:
         print(f'Error: could not read video properties ({e})', file=sys.stderr)
         return 1
+
+    if audio_tracks is not None:
+        audio_count = len(info['audio'])
+        invalid = [n for n in audio_tracks if n > audio_count]
+        if invalid:
+            parser.error(
+                f'audio track {invalid[0]} out of range '
+                f'(file has {audio_count} audio tracks)'
+            )
 
     use_hw = (not args.software) and probe.will_ha_work()
     if not args.software and not probe.will_ha_work():
         print('Warning: hardware VAAPI AV1 unavailable, falling back to software SVT-AV1')
 
     if args.test:
-        return run_test(file_input, args, use_hw)
+        return run_test(file_input, args, use_hw, audio_tracks=audio_tracks)
 
     output_path = resolve_output(file_input, args.output, args.container)
     if output_path == file_input:
@@ -299,7 +353,7 @@ def main() -> int:
         return 1
 
     return encode_once(file_input, output_path, args.quality, use_hw, args.container,
-                       resolution=args.resolution)
+                       resolution=args.resolution, audio=audio_tracks)
 
 
 if __name__ == '__main__':

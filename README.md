@@ -28,6 +28,10 @@ height multiple of 16, minimum 128x80), so the encoder never adds its own paddin
 
 `--software -s` - do not use hardware encoding
 
+`--audio -a` - audio tracks to keep: 1-based comma-separated numbers (e.g. `1,3`).
+Track numbers are the position among the audio streams as shown in the plan output
+(`a1`, `a2`, ...). Default: keep all audio tracks.
+
 `-t --test` - text mode: cut 1 minute from the middle and encode samples at q=1,3,5,7,9 into the output directory
 
 `input` - input file

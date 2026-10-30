@@ -87,6 +87,10 @@ export default defineConfig((/* ctx */) => {
         '/fs': {
           target: 'http://127.0.0.1:8000',
           changeOrigin: true
+        },
+        '/probe': {
+          target: 'http://127.0.0.1:8000',
+          changeOrigin: true
         }
       }
     },

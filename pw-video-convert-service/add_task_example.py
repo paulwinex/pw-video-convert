@@ -5,6 +5,7 @@ Create a video conversion task via API.
 Example:
     python3 add_task_example.py --input ~/video/in.mp4
     python3 add_task_example.py --input ~/video/in.mp4 --quality 7 --container mp4 --software
+    python3 add_task_example.py --input ~/video/in.mp4 --audio 1,3
 """
 
 import argparse
@@ -57,6 +58,10 @@ def main() -> None:
         "--software", action="store_true", help="force software SVT-AV1",
     )
     parser.add_argument(
+        "--audio", default=None, metavar="1,3,4",
+        help="1-based audio track numbers to keep (default: all)",
+    )
+    parser.add_argument(
         "--url", default=DEFAULT_BASE_URL,
         help=f"API base url (default: {DEFAULT_BASE_URL})",
     )
@@ -70,6 +75,13 @@ def main() -> None:
     }
     if args.output is not None:
         payload["output"] = args.output
+    if args.audio is not None:
+        try:
+            payload["audio"] = sorted({int(n) for n in args.audio.split(",")})
+            if not payload["audio"] or any(n < 1 for n in payload["audio"]):
+                raise ValueError
+        except ValueError:
+            raise SystemExit(f"invalid --audio value: {args.audio!r} (expected e.g. 1,3)")
 
     result = add_task(args.url.rstrip("/"), payload)
     print(f"created: uuid={result['uuid']} status={result['status']}")

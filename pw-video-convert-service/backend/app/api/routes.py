@@ -16,13 +16,36 @@ from app.core.config import DEFAULT_OUTPUT_DIR, REMAP_PATH
 from app.tasks.manager import TaskManager
 from app.utils.disk import get_disk_usage
 from app.utils.tasklog import log_path
+from pw_video_convert import probe
 from pw_video_convert.cli import resolve_output
 from app.tasks import filesystem
 
 from .deps import get_manager
-from .schemas import TaskCreate, ListResponse, FileEntry
+from .schemas import (
+    TaskCreate,
+    TaskReorder,
+    ListResponse,
+    FileEntry,
+    AudioTrack,
+    ProbeResponse,
+)
 
 router = APIRouter()
+
+
+def _resolve_input(raw_input: str, remap_path: str | None) -> Path:
+    """Resolve a user-supplied input path the same way for every endpoint.
+
+    The client-side prefix (`remap_path`) is replaced with the service-side
+    root BEFORE resolving, so symlinked client prefixes cannot break the
+    substitution.
+    """
+    candidate = Path(raw_input).expanduser()
+    if remap_path:
+        candidate = Path(str(candidate).replace(str(remap_path), str(REMAP_PATH)))
+    if candidate.is_absolute():
+        return candidate.resolve()
+    return (filesystem.get_user_root() / candidate).resolve()
 
 
 @router.get("/system/disk")
@@ -41,15 +64,9 @@ async def create_task(
     mgr: TaskManager = Depends(get_manager),
 ):
     try:
-        raw_input = Path(payload.input).expanduser()
-        if raw_input.is_absolute():
-            input_path = raw_input.resolve()
-        else:
-            input_path = (filesystem.get_user_root() / raw_input).resolve()
+        input_path = _resolve_input(payload.input, payload.remap_path)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=f"invalid input path: {exc}")
-    if payload.remap_path:
-        input_path = Path(str(input_path).replace(str(payload.remap_path), str(REMAP_PATH)))
     if not input_path.is_file():
         raise HTTPException(
             status_code=400, detail=f"input file not found: {input_path}"
@@ -91,6 +108,41 @@ async def create_task(
 
     uuid = await mgr.submit_convert(payload, input_path, output_path)
     return {"uuid": uuid, "status": "pending"}
+
+
+@router.get("/probe", response_model=ProbeResponse)
+def probe_file(
+    path: str = Query(..., description="Input file path (absolute or user-relative)"),
+    remap_path: str | None = Query(
+        default=None, description="Client path prefix to replace with the server root"
+    ),
+) -> ProbeResponse:
+    try:
+        input_path = _resolve_input(path, remap_path)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"invalid input path: {exc}")
+    if not input_path.is_file():
+        raise HTTPException(status_code=404, detail=f"input file not found: {input_path}")
+    try:
+        tracks = probe.get_audio_tracks(str(input_path))
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"could not probe file: {exc}")
+    return ProbeResponse(
+        path=str(input_path),
+        audio=[AudioTrack(**t) for t in tracks],
+    )
+
+
+@router.post("/tasks/reorder")
+async def reorder_tasks(
+    payload: TaskReorder,
+    mgr: TaskManager = Depends(get_manager),
+):
+    try:
+        count = await mgr.reorder(payload.uuids)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {"count": count}
 
 
 @router.post("/tasks/pause-unstarted")
@@ -192,22 +244,28 @@ async def _sse_event_stream(
     request: Request, mgr: TaskManager
 ) -> AsyncGenerator[bytes, None]:
     known: dict[str, tuple[str, int]] | None = None
+    known_order: list[str] | None = None
 
     while True:
         if await request.is_disconnected():
             break
         items = await mgr.list_tasks()
         current = {i["uuid"]: (i["status"], i["progress"]) for i in items}
+        order = [i["uuid"] for i in items]
 
         if known is None:
             payload = {"type": "snapshot", "items": items, "ts": time.time()}
             yield f"event: tasks\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
             known = current
+            known_order = order
         else:
             changed = [
                 i for i in items if i["uuid"] not in known or known[i["uuid"]] != current[i["uuid"]]
             ]
             removed = [u for u in known if u not in current]
+            if order != known_order:
+                # the whole list order changed (e.g. queue reorder) — push all
+                changed = items
             if changed or removed:
                 payload = {
                     "type": "update",
@@ -219,6 +277,7 @@ async def _sse_event_stream(
             else:
                 yield ": ping\n\n"
             known = current
+            known_order = order
         await asyncio.sleep(0.5)
 
 

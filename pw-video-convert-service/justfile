@@ -32,3 +32,23 @@ front:
 [working-directory: 'frontend']
 build:
 	yarn build
+
+[group('frontend')]
+[script]
+seticon SOURCE:
+    set +e
+    SOURCE_PATH="{{SOURCE}}"
+    case "$SOURCE_PATH" in
+        /*) ;;
+        *) SOURCE_PATH="$PWD/$SOURCE_PATH" ;;
+    esac
+
+    if [ ! -f "$SOURCE_PATH" ]; then
+        echo "File not found: $SOURCE_PATH" >&2
+        exit 1
+    fi
+
+    cd frontend || exit 1
+    npx --yes @quasar/icongenie generate -m spa -i "$SOURCE_PATH" --quality 8
+    exit $?
+#

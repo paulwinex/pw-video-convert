@@ -63,3 +63,106 @@ def test_invalid_resolution_raises():
     with pytest.raises(ValueError):
         encode.build_encode_cmd('in.mkv', 'out.mkv', _info(), 30, False, '8', 'mkv',
                                 resolution='1920')
+
+
+def _with_audio(*tracks):
+    info = _info()
+    info['audio'] = [
+        {'codec': codec, 'channels': channels, 'stream_bitrate': bitrate}
+        for codec, channels, bitrate in tracks
+    ]
+    return info
+
+
+@pytest.mark.parametrize('channels,layout', [
+    (1, 'mono'),
+    (2, 'stereo'),
+    (3, '3.0'),
+    (4, 'quad'),
+    (5, '5.0'),
+    (6, '5.1'),
+    (7, '6.1'),
+    (8, '7.1'),
+])
+def test_opus_requests_libopus_compatible_channel_layout(channels, layout):
+    info = _with_audio(('ac3', channels, None))
+    cmd = encode.build_encode_cmd('in.mkv', 'out.mkv', info, 30, False, '8', 'mkv')
+    assert cmd[cmd.index('-ac:a:0') + 1] == str(channels)
+    assert cmd[cmd.index('-ch_layout:a:0') + 1] == layout
+
+
+def test_opus_four_channel_track_forces_quad_not_ffmpeg_default_4_0():
+    info = _with_audio(('ac3', 4, 448000))
+    cmd = encode.build_encode_cmd('in.mkv', 'out.mkv', info, 30, False, '8', 'mkv')
+    assert cmd[cmd.index('-ch_layout:a:0') + 1] == 'quad'
+
+
+def test_opus_downmixes_channel_counts_above_vorbis_layouts():
+    plan = encode.build_audio_plan(_with_audio(('dts', 12, 1536000)))
+    assert plan[0]['action'] == 'opus'
+    assert plan[0]['channels'] == 2
+    assert plan[0]['layout'] == 'stereo'
+
+
+def test_audio_copy_track_has_no_channel_layout():
+    plan = encode.build_audio_plan(_with_audio(('opus', 6, 320000)))
+    cmd = encode.build_encode_cmd('in.mkv', 'out.mkv', _with_audio(('opus', 6, 320000)),
+                                  30, False, '8', 'mkv')
+    assert plan[0]['action'] == 'copy'
+    assert '-ch_layout:a:0' not in cmd
+
+
+def _maps(cmd):
+    return [cmd[i + 1] for i, tok in enumerate(cmd) if tok == '-map']
+
+
+def test_audio_selection_keeps_only_selected_tracks():
+    info = _with_audio(('ac3', 6, 448000), ('aac', 2, 128000), ('dts', 6, 1536000))
+    cmd = encode.build_encode_cmd('in.mkv', 'out.mkv', info, 30, False, '8', 'mkv',
+                                  audio=[0, 2])
+    assert _maps(cmd) == ['0:v:0', '0:a:0', '0:a:2']
+    assert '0:a:1' not in cmd
+    assert cmd[cmd.index('-c:a:0') + 1] == 'libopus'
+    assert cmd[cmd.index('-c:a:1') + 1] == 'libopus'
+
+
+def test_audio_selection_renumbers_output_stream_indexes():
+    info = _with_audio(('aac', 2, 128000), ('dts', 6, 1536000))
+    cmd = encode.build_encode_cmd('in.mkv', 'out.mkv', info, 30, False, '8', 'mkv',
+                                  audio=[1])
+    assert _maps(cmd) == ['0:v:0', '0:a:1']
+    assert cmd[cmd.index('-c:a:0') + 1] == 'libopus'
+    assert cmd[cmd.index('-b:a:0') + 1] == str(
+        encode.audio_target_bitrate(6, 1536000))
+    assert cmd[cmd.index('-ac:a:0') + 1] == '6'
+    assert '-c:a:1' not in cmd
+
+
+def test_audio_selection_first_track_copy_renumbered_to_zero():
+    info = _with_audio(('ac3', 6, 448000), ('opus', 2, 96000))
+    cmd = encode.build_encode_cmd('in.mkv', 'out.mkv', info, 30, False, '8', 'mkv',
+                                  audio=[1])
+    assert _maps(cmd) == ['0:v:0', '0:a:1']
+    assert cmd[cmd.index('-c:a:0') + 1] == 'copy'
+    assert '-c:a:1' not in cmd
+
+
+def test_audio_selection_out_of_range_raises():
+    info = _with_audio(('aac', 2, 128000))
+    with pytest.raises(ValueError, match='out of range'):
+        encode.build_audio_plan(info, audio=[2])
+    with pytest.raises(ValueError, match='out of range'):
+        encode.build_encode_cmd('in.mkv', 'out.mkv', info, 30, False, '8', 'mkv',
+                                audio=[5])
+
+
+def test_build_audio_plan_filters_selected_ordinals():
+    info = _with_audio(('aac', 2, 128000), ('ac3', 6, 448000), ('dts', 2, 768000))
+    plan = encode.build_audio_plan(info, audio=[2])
+    assert [t['ordinal'] for t in plan] == [2]
+    assert plan[0]['action'] == 'opus'
+
+
+def test_build_audio_plan_without_selection_keeps_all():
+    info = _with_audio(('aac', 2, 128000), ('ac3', 6, 448000))
+    assert [t['ordinal'] for t in encode.build_audio_plan(info)] == [0, 1]

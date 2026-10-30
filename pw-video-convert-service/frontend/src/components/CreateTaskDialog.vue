@@ -46,6 +46,44 @@
           <div class="text-subtitle2 q-mb-xs">Resolution</div>
           <q-select v-model="resolution" :options="resolutionOptions" dense emit-value map-options />
         </div>
+
+        <div v-if="audioRows.length > 0 || probingCount > 0">
+          <div class="text-subtitle2 q-mb-xs">Audio tracks</div>
+          <div v-for="row in audioRows" :key="row.path" class="row items-center q-col-gutter-sm">
+            <div class="col-12 col-md-5 ellipsis text-caption text-grey-5" :title="row.path">
+              {{ baseName(row.path) }}
+            </div>
+            <div class="col-12 col-md">
+              <q-select
+                v-model="audioState[row.path].selected"
+                :options="audioOptions(row.path)"
+                :display-value="row.state.selected.join(', ')"
+                dense
+                multiple
+                emit-value
+                map-options
+              >
+                <template #option="{ itemProps, opt, selected, toggleOption }">
+                  <q-item v-bind="itemProps">
+                    <q-item-section>
+                      <q-item-label>{{ opt.label }}</q-item-label>
+                    </q-item-section>
+                    <q-item-section side>
+                      <q-toggle
+                        :model-value="selected"
+                        @update:model-value="toggleOption(opt)"
+                        dense
+                      />
+                    </q-item-section>
+                  </q-item>
+                </template>
+              </q-select>
+            </div>
+          </div>
+          <div v-if="probingCount > 0" class="text-caption text-grey-7">
+            Checking audio tracks ({{ probingCount }} left)…
+          </div>
+        </div>
       </q-card-section>
 
       <q-card-actions align="right">
@@ -63,8 +101,17 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import FileExplorerDialog from './FileExplorerDialog.vue';
+import { probeFile, type AudioTrack } from '@/services/tasks';
+
+const REMAP_PATH = '/mnt/NAS';
+
+interface FileAudioState {
+  tracks: AudioTrack[] | null;
+  selected: number[];
+  loading: boolean;
+}
 
 const props = defineProps<{
   modelValue: boolean;
@@ -86,6 +133,7 @@ const quality = ref(5);
 const output = ref('');
 const resolution = ref('original');
 const loading = ref(false);
+const audioState = ref<Record<string, FileAudioState>>({});
 
 const resolutionOptions = [
   { label: 'Original', value: 'original' },
@@ -109,6 +157,81 @@ function parseFiles(text: string): string[] {
 
 const parsedCount = computed(() => parseFiles(filesText.value).length);
 
+function baseName(path: string): string {
+  return path.split('/').pop() ?? path;
+}
+
+function trackLabel(t: AudioTrack): string {
+  const parts = [`#${t.track}`];
+  if (t.language) parts.push(t.language);
+  if (t.title) parts.push(t.title);
+  parts.push(t.codec);
+  parts.push(`${t.channels}ch`);
+  return parts.join(' · ');
+}
+
+function audioOptions(path: string): { label: string; value: number }[] {
+  return (audioState.value[path]?.tracks ?? []).map((t) => ({
+    label: trackLabel(t),
+    value: t.track,
+  }));
+}
+
+async function runProbes(paths: string[]): Promise<void> {
+  const queue = [...paths];
+  const worker = async (): Promise<void> => {
+    while (queue.length > 0) {
+      const path = queue.shift();
+      if (!path) return;
+      try {
+        const tracks = await probeFile(path, REMAP_PATH);
+        if (!(path in audioState.value)) continue;
+        audioState.value[path] = {
+          tracks,
+          selected: tracks.map((t) => t.track),
+          loading: false,
+        };
+      } catch {
+        if (path in audioState.value) {
+          audioState.value[path] = { tracks: null, selected: [], loading: false };
+        }
+      }
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(4, queue.length) }, worker)
+  );
+}
+
+function syncAudioProbes(): void {
+  const paths = parseFiles(filesText.value);
+  for (const key of Object.keys(audioState.value)) {
+    if (!paths.includes(key)) delete audioState.value[key];
+  }
+  const missing = paths.filter((p) => !(p in audioState.value));
+  if (missing.length === 0) return;
+  for (const p of missing) {
+    audioState.value[p] = { tracks: null, selected: [], loading: true };
+  }
+  void runProbes(missing);
+}
+
+let probeTimer: ReturnType<typeof setTimeout> | null = null;
+watch(filesText, () => {
+  if (probeTimer) clearTimeout(probeTimer);
+  probeTimer = setTimeout(syncAudioProbes, 500);
+});
+
+const audioRows = computed(() =>
+  Object.entries(audioState.value)
+    .filter(([, state]) => (state.tracks?.length ?? 0) >= 2)
+    .map(([path, state]) => ({ path, state }))
+);
+
+const probingCount = computed(
+  () => Object.values(audioState.value).filter((s) => s.loading).length
+);
+
 function onFilesPicked(paths: string[]): void {
   const merged = parseFiles(filesText.value);
   const seen = new Set(merged);
@@ -128,6 +251,11 @@ function reset() {
   output.value = '';
   resolution.value = 'original';
   loading.value = false;
+  audioState.value = {};
+  if (probeTimer) {
+    clearTimeout(probeTimer);
+    probeTimer = null;
+  }
 }
 
 function close() {
@@ -154,6 +282,12 @@ async function submit() {
   if (!v.ok) {
     errors.push(v.error || 'Invalid output');
   }
+  for (const input of inputs) {
+    const state = audioState.value[input];
+    if (state?.tracks && state.tracks.length >= 2 && state.selected.length === 0) {
+      errors.push(`${baseName(input)}: keep at least one audio track`);
+    }
+  }
   if (errors.length > 0) {
     return Promise.reject(new Error(errors.join('\n')));
   }
@@ -166,7 +300,7 @@ async function submit() {
         input,
         quality: quality.value,
         output: output.value.trim() ? output.value.trim() : undefined,
-        remap_path: '/mnt/NAS',
+        remap_path: REMAP_PATH,
       };
       if (resolution.value !== 'original') {
         const parts = (resolution.value as string).split(',');
@@ -175,6 +309,10 @@ async function submit() {
         if (!isNaN(w) && !isNaN(h)) {
           payload.resolution = [w, h];
         }
+      }
+      const state = audioState.value[input];
+      if (state?.tracks && state.selected.length < state.tracks.length) {
+        payload.audio = [...state.selected].sort((a, b) => a - b);
       }
       payloads.push(payload);
     }

@@ -18,7 +18,7 @@ def get_media_info(file_input: str) -> dict:
         '-show_entries',
         'stream=index,codec_type,codec_name,pix_fmt,width,height,channels,'
         'bit_rate,avg_frame_rate:format=duration,size'
-        ':stream_side_data=side_data_type',
+        ':stream_side_data=side_data_type:stream_tags=language,title',
         '-of', 'json',
     ], file_input)
     data = json.loads(out)
@@ -56,11 +56,14 @@ def get_media_info(file_input: str) -> dict:
                 'stream_bitrate': _int_or_none(stream.get('bit_rate')),
             }
         elif stype == 'audio':
+            tags = stream.get('tags') or {}
             audio.append({
                 'index': stream['index'],
                 'codec': stream.get('codec_name', ''),
                 'channels': int(stream.get('channels', 1) or 1),
                 'stream_bitrate': _int_or_none(stream.get('bit_rate')),
+                'language': tags.get('language'),
+                'title': tags.get('title'),
             })
         elif stype == 'subtitle':
             subs.append({
@@ -81,6 +84,32 @@ def get_media_info(file_input: str) -> dict:
         'subs': subs,
         'frame_count': frame_count,
     }
+
+
+def get_audio_tracks(file_input: str) -> list[dict]:
+    """Fast header-only audio listing for UIs (no packet counting).
+
+    Returns tracks with user-facing 1-based `track` numbers.
+    """
+    out = _ffprobe([
+        '-select_streams', 'a',
+        '-show_entries',
+        'stream=index,codec_name,channels,bit_rate:stream_tags=language,title',
+        '-of', 'json',
+    ], file_input)
+    tracks = []
+    for position, stream in enumerate(json.loads(out).get('streams', [])):
+        tags = stream.get('tags') or {}
+        tracks.append({
+            'track': position + 1,
+            'index': stream.get('index'),
+            'codec': stream.get('codec_name', ''),
+            'channels': int(stream.get('channels', 1) or 1),
+            'language': tags.get('language'),
+            'title': tags.get('title'),
+            'stream_bitrate': _int_or_none(stream.get('bit_rate')),
+        })
+    return tracks
 
 
 def _int_or_none(value: Optional[str]) -> Optional[int]:

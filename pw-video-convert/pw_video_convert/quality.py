@@ -10,9 +10,9 @@ Q_MAX = 10
 # Higher tiers are raised proportionally, tapering to the unchanged
 # size-oriented tiers at the bottom of the scale.
 SVT_CRF_BY_Q: Dict[int, int] = {
-    10: 10,
-    9: 13,
-    8: 15,
+    10: 7,
+    9: 10,
+    8: 14,
     7: 18,
     6: 21,
     5: 25,
@@ -40,9 +40,9 @@ SVT_PRESET_BY_Q: Dict[int, str] = {
 # (too high quality/too low CRF for the desired size reduction). Push CRF up
 # (aggressively drop quality) for those sources.
 REENCODE_HEAVY_SOURCE_CRFS = {
-    10: 16,
-    9: 19,
-    8: 21,
+    10: 12,
+    9: 15,
+    8: 20,
     7: 24,
     6: 27,
     5: 31,

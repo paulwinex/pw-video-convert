@@ -2,18 +2,20 @@
 import sys
 import os
 import json
+import subprocess
 import urllib.error
 import urllib.request
 
 from PyQt5.QtWidgets import (
     QApplication, QDialog, QVBoxLayout, QHBoxLayout, QLabel,
     QListWidget, QSlider, QLineEdit, QPushButton, QFileDialog, QComboBox,
-    QMessageBox
+    QCheckBox, QMessageBox
 )
 from PyQt5.QtCore import Qt
 
 CONFIG_PATH = os.path.expanduser("~/.config/pw-convert.json")
 DEFAULT_BASE_URL = os.getenv("PW_CONV_HOST_URL") or "http://192.168.0.155:8055"
+REMAP_PATH = "/mnt/NAS"
 
 DEFAULTS = {
     "quality": 5,
@@ -79,12 +81,109 @@ def add_task(base_url: str, payload: dict) -> dict:
         raise RuntimeError(f"cannot reach {base_url}: {e.reason}") from None
 
 
+def probe_tracks(file_path: str) -> list:
+    """Read the audio track list from the local file with ffprobe.
+
+    The submitter machine has direct access to the file, so no service
+    round-trip (and no path remapping) is needed for the track listing.
+    """
+    cmd = [
+        "ffprobe", "-v", "error",
+        "-select_streams", "a",
+        "-show_entries",
+        "stream=index,codec_name,channels,bit_rate:stream_tags=language,title",
+        "-of", "json",
+        file_path,
+    ]
+    try:
+        out = subprocess.check_output(cmd, stderr=subprocess.STDOUT)
+    except FileNotFoundError:
+        raise RuntimeError(
+            "ffprobe not found; install ffmpeg on this machine"
+        ) from None
+    except subprocess.CalledProcessError as e:
+        detail = (e.output or b"").decode("utf-8", errors="replace").strip()
+        raise RuntimeError(f"ffprobe failed: {detail[:300]}") from None
+
+    tracks = []
+    for position, stream in enumerate(json.loads(out).get("streams", [])):
+        tags = stream.get("tags") or {}
+        try:
+            bitrate = int(stream.get("bit_rate", 0) or 0) or None
+        except (TypeError, ValueError):
+            bitrate = None
+        tracks.append({
+            "track": position + 1,
+            "index": stream.get("index"),
+            "codec": stream.get("codec_name", ""),
+            "channels": int(stream.get("channels", 1) or 1),
+            "language": tags.get("language"),
+            "title": tags.get("title"),
+            "stream_bitrate": bitrate,
+        })
+    return tracks
+
+
+def track_label(track: dict) -> str:
+    parts = [f"#{track.get('track')}"]
+    if track.get("language"):
+        parts.append(track["language"])
+    if track.get("title"):
+        parts.append(track["title"])
+    parts.append(track.get("codec") or "?")
+    parts.append(f"{track.get('channels', '?')}ch")
+    return " · ".join(parts)
+
+
+class AudioTracksDialog(QDialog):
+    """Checkbox list of a file's audio tracks; all checked by default."""
+
+    def __init__(self, file_name: str, tracks: list, selected: list, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Audio tracks — {file_name}")
+        self._boxes = []
+        self._ok = None
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel(f"Select audio tracks to keep in {file_name}:"))
+        keep = set(selected) if selected else {t.get("track") for t in tracks}
+        for track in tracks:
+            box = QCheckBox(track_label(track))
+            box.setChecked(track.get("track") in keep)
+            box.stateChanged.connect(self._update_ok)
+            self._boxes.append((track.get("track"), box))
+            layout.addWidget(box)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        cancel = QPushButton("Cancel")
+        cancel.clicked.connect(self.reject)
+        self._ok = QPushButton("OK")
+        self._ok.clicked.connect(self.accept)
+        buttons.addWidget(cancel)
+        buttons.addWidget(self._ok)
+        layout.addLayout(buttons)
+        self._update_ok()
+
+    def _update_ok(self, *args):
+        if self._ok is not None:
+            self._ok.setEnabled(bool(self.selected()))
+
+    def selected(self) -> list:
+        return sorted(n for n, box in self._boxes if box.isChecked())
+
+
 class ConvertDialog(QDialog):
     def __init__(self, files, parent=None):
         super().__init__(parent)
         self.files = files
+        self.abs_files = [os.path.abspath(f) for f in files]
+        # per-file audio selection: {abs_path: [1-based track numbers]};
+        # missing entry = keep all tracks
+        self.audio_sel = {}
+        self.track_cache = {}
         self.setWindowTitle(f"PW Convert [{DEFAULT_BASE_URL}]")
-        self.resize(600, 300)
+        self.resize(600, 400)
 
         cfg = load_config()
 
@@ -94,7 +193,8 @@ class ConvertDialog(QDialog):
         layout.addWidget(QLabel("Files:"))
         self.file_list = QListWidget()
         self.file_list.addItems(files if files else ["(no files provided)"])
-        self.file_list.setSelectionMode(QListWidget.NoSelection)
+        self.file_list.setSelectionMode(QListWidget.SingleSelection)
+        self.file_list.currentRowChanged.connect(lambda _: self._update_audio_summary())
         layout.addWidget(self.file_list)
 
         # --- Quality ---
@@ -136,10 +236,74 @@ class ConvertDialog(QDialog):
         r_layout.addWidget(self.resolution_combo)
         layout.addLayout(r_layout)
 
+        # --- Audio tracks (per selected file) ---
+        a_layout = QHBoxLayout()
+        self.audio_btn = QPushButton("Audio tracks\u2026")
+        self.audio_btn.clicked.connect(self.on_audio_tracks)
+        self.audio_summary = QLabel("")
+        a_layout.addWidget(self.audio_btn)
+        a_layout.addWidget(self.audio_summary, 1)
+        layout.addLayout(a_layout)
+        if self.files:
+            self.file_list.setCurrentRow(0)
+        else:
+            self._update_audio_summary()
+
         # --- Submit ---
         self.submit_btn = QPushButton("Submit")
         self.submit_btn.clicked.connect(self.on_submit)
         layout.addWidget(self.submit_btn)
+
+    def _current_abs(self):
+        row = self.file_list.currentRow()
+        if 0 <= row < len(self.abs_files):
+            return self.abs_files[row]
+        return None
+
+    def _update_audio_summary(self):
+        path = self._current_abs()
+        if path is None:
+            self.audio_summary.setText("")
+            return
+        total = len(self.track_cache.get(path, []))
+        sel = self.audio_sel.get(path)
+        if sel is None:
+            text = f"all ({total})" if total else "all"
+        else:
+            joined = ",".join(str(n) for n in sel)
+            text = f"{joined} (of {total})" if total else joined
+        self.audio_summary.setText(text)
+
+    def on_audio_tracks(self):
+        path = self._current_abs()
+        if not path:
+            return
+        if path not in self.track_cache:
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            try:
+                tracks = probe_tracks(path)
+            except RuntimeError as e:
+                QApplication.restoreOverrideCursor()
+                QMessageBox.warning(self, "Probe failed", f"{path}:\n{e}")
+                return
+            else:
+                QApplication.restoreOverrideCursor()
+            self.track_cache[path] = tracks
+        tracks = self.track_cache[path]
+        if not tracks:
+            QMessageBox.information(
+                self, "Audio tracks", "This file has no audio tracks."
+            )
+            return
+        current = self.audio_sel.get(path) or [t["track"] for t in tracks]
+        dlg = AudioTracksDialog(os.path.basename(path), tracks, current, self)
+        if dlg.exec_() == QDialog.Accepted:
+            sel = dlg.selected()
+            if sel and len(sel) < len(tracks):
+                self.audio_sel[path] = sel
+            else:
+                self.audio_sel.pop(path, None)
+            self._update_audio_summary()
 
 
     def on_submit(self):
@@ -159,11 +323,14 @@ class ConvertDialog(QDialog):
                 "input": os.path.abspath(f),
                 "quality": quality,
                 "output": output,
-                "remap_path": "/mnt/NAS"
+                "remap_path": REMAP_PATH
             }
             resolution = self.resolution_combo.currentData()
             if resolution is not None:
                 payload["resolution"] = resolution
+            audio_sel = self.audio_sel.get(os.path.abspath(f))
+            if audio_sel:
+                payload["audio"] = audio_sel
             try:
                 result = add_task(base_url, payload)
                 print(

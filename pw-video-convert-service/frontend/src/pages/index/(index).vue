@@ -96,16 +96,32 @@
     </div>
 
     <q-table
+      ref="tableRef"
       flat
       bordered
       dense
       :rows="filteredTasks"
       :columns="columns"
       row-key="uuid"
+      :row-props="rowProps"
       :pagination="{ rowsPerPage: 0 }"
       hide-bottom
       no-data-label="No tasks"
     >
+      <template #body-cell-order="props">
+        <q-td :props="props">
+          <q-icon
+            v-if="props.row.status === 'pending' && canDrag"
+            name="drag_indicator"
+            size="20px"
+            color="grey-6"
+            class="drag-handle"
+          >
+            <q-tooltip>Drag to change queue order</q-tooltip>
+          </q-icon>
+        </q-td>
+      </template>
+
       <template #body-cell-status="props">
         <q-td :props="props">
           <div class="row items-center no-wrap q-gutter-xs">
@@ -330,10 +346,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useQuasar, type QTableColumn } from 'quasar';
+import Sortable from 'sortablejs';
+import type { SortableEvent } from 'sortablejs';
 import CreateTaskDialog from '@/components/CreateTaskDialog.vue';
 import {
+  compareTasks,
   createTask,
   deleteByActivity,
   deleteTask,
@@ -342,6 +361,7 @@ import {
   fetchTasks,
   pauseTask,
   pauseUnstarted,
+  reorderTasks,
   startStopped,
   startTask,
   stopTask,
@@ -359,6 +379,9 @@ const filteredTasks = computed(() => {
   if (!q) return tasks.value;
   return tasks.value.filter((t) => t.name.toLowerCase().includes(q));
 });
+
+// reordering only makes sense when the table shows the full queue
+const canDrag = computed(() => !(filter.value ?? '').trim());
 
 const hasPending = computed(() =>
   tasks.value.some((t) => t.status === 'pending')
@@ -381,6 +404,7 @@ const createDialog = ref(false);
 const createDialogRef = ref<any>(null);
 
 const columns: QTableColumn<Task>[] = [
+  { name: 'order', label: '', field: 'uuid', align: 'center', style: 'width: 36px' },
   { name: 'name', label: 'File name', field: 'name', align: 'left' },
   { name: 'status', label: 'Status', field: 'status', align: 'left' },
   { name: 'progress', label: 'Progress', field: 'progress', align: 'left' },
@@ -412,6 +436,100 @@ const columns: QTableColumn<Task>[] = [
 
 const now = ref(Date.now());
 let tick: ReturnType<typeof setInterval> | undefined;
+
+const tableRef = ref<any>(null);
+let sortable: Sortable | null = null;
+let reorderInFlight = false;
+
+function rowProps(row: Task): Record<string, unknown> {
+  return {
+    'data-uuid': row.uuid,
+    'data-pending': row.status === 'pending' ? 'true' : 'false',
+  };
+}
+
+function ensureSortable(): void {
+  if (sortable) return;
+  const tbody: HTMLElement | undefined | null =
+    tableRef.value?.$el?.querySelector('tbody');
+  if (!tbody) return;
+  sortable = Sortable.create(tbody, {
+    handle: '.drag-handle',
+    animation: 150,
+    ghostClass: 'drag-ghost',
+    // pending rows form a contiguous block; forbid dropping outside it
+    onMove: (evt) => {
+      const related = evt.related as HTMLElement | null;
+      if (!related) {
+        const children = tbody.children;
+        const last = children[children.length - 1] as HTMLElement | null;
+        return last?.dataset.pending === 'true';
+      }
+      return related.dataset.pending === 'true';
+    },
+    onEnd: (evt) => void onDragEnd(evt),
+  });
+}
+
+async function onDragEnd(evt: SortableEvent): Promise<void> {
+  const { oldIndex, newIndex, item, from } = evt;
+
+  // Vue owns these rows: undo Sortable's DOM move and let data drive rendering
+  if (oldIndex != null && newIndex != null && oldIndex !== newIndex) {
+    const anchor = from.children[oldIndex + (newIndex < oldIndex ? 1 : 0)];
+    from.insertBefore(item, anchor ?? null);
+  }
+  if (
+    oldIndex == null ||
+    newIndex == null ||
+    oldIndex === newIndex ||
+    !canDrag.value ||
+    reorderInFlight
+  ) {
+    return;
+  }
+
+  const rows = filteredTasks.value;
+  const uuid = (item as HTMLElement).dataset.uuid;
+  const firstPendingIdx = rows.findIndex((r) => r.status === 'pending');
+  if (!uuid || firstPendingIdx < 0) return;
+
+  const uuids = rows
+    .filter((r) => r.status === 'pending')
+    .map((r) => r.uuid);
+  const fromIdx = uuids.indexOf(uuid);
+  if (fromIdx < 0) return;
+  // tbody indexes include the running row(s) above the pending block
+  const toIdx = Math.max(
+    0,
+    Math.min(newIndex - firstPendingIdx, uuids.length - 1)
+  );
+  if (toIdx === fromIdx) return;
+  const [moved] = uuids.splice(fromIdx, 1);
+  if (moved === undefined) return;
+  uuids.splice(toIdx, 0, moved);
+
+  // optimistic local move so the row lands immediately
+  const position = new Map(uuids.map((u, i) => [u, i]));
+  tasks.value = tasks.value
+    .map((t) =>
+      t.status === 'pending'
+        ? { ...t, queue_order: position.get(t.uuid) ?? null }
+        : t
+    )
+    .sort(compareTasks);
+
+  reorderInFlight = true;
+  try {
+    await reorderTasks(uuids);
+    await fetchTasks();
+  } catch (e) {
+    $q.notify({ type: 'negative', message: String(e) });
+    await fetchTasks().catch(() => undefined);
+  } finally {
+    reorderInFlight = false;
+  }
+}
 
 const disk = ref<DiskInfo | null>(null);
 let diskTimer: ReturnType<typeof setInterval> | undefined;
@@ -698,15 +816,31 @@ onMounted(async () => {
     now.value = Date.now();
   }, 1000);
   diskTimer = setInterval(loadDisk, 15000);
+  await nextTick();
+  ensureSortable();
 });
+
+// tbody may not exist on the first paint (empty table)
+watch(tasks, () => ensureSortable());
 
 onUnmounted(() => {
   if (tick) clearInterval(tick);
   if (diskTimer) clearInterval(diskTimer);
+  sortable?.destroy();
+  sortable = null;
 });
 </script>
 
 <style scoped>
+/* the ghost class lands on QTable's own <tr>, outside this component's scope */
+:deep(.drag-ghost) {
+  opacity: 0.35;
+}
+
+.drag-handle {
+  cursor: move;
+}
+
 .log-pre {
   margin: 0;
   font-family: monospace;

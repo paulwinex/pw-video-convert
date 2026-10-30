@@ -13,6 +13,20 @@ FORMAT_NAMES = {'mkv': 'matroska', 'mp4': 'mp4'}
 
 OPUS_MAX_BITRATE = 512000
 
+# libopus only accepts the Vorbis channel layouts (one per channel count).
+# FFmpeg's default layout for 4 channels is 4.0, which libopus rejects, so
+# every re-encoded track has to request the matching Vorbis layout explicitly.
+OPUS_LAYOUTS = {
+    1: 'mono',
+    2: 'stereo',
+    3: '3.0',
+    4: 'quad',
+    5: '5.0',
+    6: '5.1',
+    7: '6.1',
+    8: '7.1',
+}
+
 
 def audio_target_bitrate(channels: int, source_bitrate: Optional[int]) -> int:
     if channels >= 7:
@@ -29,21 +43,41 @@ def audio_target_bitrate(channels: int, source_bitrate: Optional[int]) -> int:
     return min(source_bitrate, max(floor, round(source_bitrate * 0.35)), OPUS_MAX_BITRATE)
 
 
-def build_audio_plan(info: dict) -> List[dict]:
+def build_audio_plan(info: dict, audio: Optional[List[int]] = None) -> List[dict]:
+    """Plan audio tracks; `audio` is a list of 0-based ordinals to keep (None = all)."""
+    if audio is not None:
+        count = len(info['audio'])
+        for ordinal in audio:
+            if not 0 <= ordinal < count:
+                raise ValueError(
+                    f'audio track {ordinal + 1} out of range '
+                    f'(file has {count} audio tracks)'
+                )
     plan = []
     for ordinal, track in enumerate(info['audio']):
+        if audio is not None and ordinal not in audio:
+            continue
         if track['codec'] in OPTIMAL_AUDIO_CODECS:
             action = 'copy'
             bitrate = None
+            channels = track['channels']
+            layout = None
         else:
             action = 'opus'
-            bitrate = audio_target_bitrate(track['channels'], track['stream_bitrate'])
+            channels = track['channels']
+            layout = OPUS_LAYOUTS.get(channels)
+            if layout is None:
+                # libopus has no Vorbis layout above 8 channels; downmix.
+                channels = 2
+                layout = OPUS_LAYOUTS[channels]
+            bitrate = audio_target_bitrate(channels, track['stream_bitrate'])
         plan.append({
             'ordinal': ordinal,
             'codec': track['codec'],
             'action': action,
             'bitrate': bitrate,
-            'channels': track['channels'],
+            'channels': channels,
+            'layout': layout,
         })
     return plan
 
@@ -76,6 +110,7 @@ def build_encode_cmd(
     preset: Optional[str],
     container: str,
     resolution: Optional[Union[str, List[int]]] = None,
+    audio: Optional[List[int]] = None,
 ) -> List[str]:
     video = info['video']
     plan = frame.plan_video(video['width'], video['height'], resolution)
@@ -105,16 +140,19 @@ def build_encode_cmd(
 
     cmd.extend(['-map', '0:v:0'])
 
-    audio_plan = build_audio_plan(info)
-    for track in audio_plan:
+    audio_plan = build_audio_plan(info, audio)
+    # -map refers to input ordinals, per-stream options to output indexes;
+    # they diverge once tracks are filtered out.
+    for out_index, track in enumerate(audio_plan):
         cmd.extend(['-map', f'0:a:{track["ordinal"]}'])
         if track['action'] == 'copy':
-            cmd.extend([f'-c:a:{track["ordinal"]}', 'copy'])
+            cmd.extend([f'-c:a:{out_index}', 'copy'])
         else:
             cmd.extend([
-                f'-c:a:{track["ordinal"]}', 'libopus',
-                f'-b:a:{track["ordinal"]}', str(track['bitrate']),
-                f'-ac:a:{track["ordinal"]}', str(track['channels']),
+                f'-c:a:{out_index}', 'libopus',
+                f'-b:a:{out_index}', str(track['bitrate']),
+                f'-ac:a:{out_index}', str(track['channels']),
+                f'-ch_layout:a:{out_index}', track['layout'],
             ])
 
     subs_kept, _ = build_subtitle_plan(info, container)
@@ -205,9 +243,11 @@ def run_encode(
     output_fn: Callable[[float, Optional[int]], None],
     cancel_event: Callable[[], bool],
     resolution: Optional[Union[str, List[int]]] = None,
+    audio: Optional[List[int]] = None,
 ) -> Optional[str]:
     cmd = build_encode_cmd(
-        file_input, file_output, info, quality_value, hw, preset, container, resolution
+        file_input, file_output, info, quality_value, hw, preset, container,
+        resolution, audio,
     )
     print(f'Command: {shlex.join(cmd)}')
     _, error = get_progress(cmd, output_fn, info['frame_count'], cancel_event)
