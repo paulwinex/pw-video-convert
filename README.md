@@ -57,6 +57,7 @@ Python package for encoding process.
 - Hardware encoding acceleration supported
 - audio track selector
 - changing resolution
+- add external audio track
 - TUI progress bar
 
 #### pw-video-convert-service
@@ -71,7 +72,7 @@ Simple Web Service with a FIFO queue of conversion tasks.
 
 #### submitter
 
-<img src="./docs/images/img1.jpg" alt="submitter" title="image1" width="966">
+<img src="./docs/images/img1.jpg" alt="submitter" title="image1" width="483">
 
 A simple PyQt5 dialog box for sending local files. If your encoding service is hosted on a different machine, the local paths must match those on the encoding machine.
 
