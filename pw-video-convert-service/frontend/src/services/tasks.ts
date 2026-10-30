@@ -40,19 +40,12 @@ type StreamPayload = SnapshotPayload | UpdatePayload;
 export const sseConnected = ref(false);
 export const tasks = ref<Task[]>([]);
 
-// Mirror of the backend order: running first, then pending by queue_order
-// (next to run first), then everything else newest first.
-const BIG = Number.MAX_SAFE_INTEGER;
-
+// Mirror of the backend order: list position (queue_order) descending —
+// new tasks land on top, the bottom-most pending row runs next.
 export function compareTasks(a: Task, b: Task): number {
-  const key = (t: Task): [number, number, number] => {
-    if (t.status === 'running') return [0, 0, -t.id];
-    if (t.status === 'pending')
-      return [1, t.queue_order ?? BIG, t.id];
-    return [2, 0, -t.id];
-  };
-  const [ka, kb] = [key(a), key(b)];
-  return ka[0] - kb[0] || ka[1] - kb[1] || ka[2] - kb[2];
+  const qa = a.queue_order ?? -Number.MAX_SAFE_INTEGER;
+  const qb = b.queue_order ?? -Number.MAX_SAFE_INTEGER;
+  return qb - qa || b.id - a.id;
 }
 
 let es: EventSource | null = null;
@@ -145,6 +138,11 @@ export async function probeFile(
   return ((await res.json()) as { audio: AudioTrack[] }).audio;
 }
 
+export interface AudioAdd {
+  path: string;
+  label: string;
+}
+
 export interface TaskCreatePayload {
   input: string;
   output?: string;
@@ -153,6 +151,8 @@ export interface TaskCreatePayload {
   software?: boolean;
   resolution?: [number, number];
   audio?: number[];
+  audio_add?: AudioAdd[];
+  paused?: boolean;
   remap_path?: string | null;
 }
 

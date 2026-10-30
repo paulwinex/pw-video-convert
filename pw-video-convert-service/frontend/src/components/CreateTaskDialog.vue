@@ -47,41 +47,70 @@
           <q-select v-model="resolution" :options="resolutionOptions" dense emit-value map-options />
         </div>
 
-        <div v-if="audioRows.length > 0 || probingCount > 0">
+        <q-checkbox v-model="createPaused" label="Create paused" dense />
+
+        <div v-if="inputPaths.length > 0">
           <div class="text-subtitle2 q-mb-xs">Audio tracks</div>
-          <div v-for="row in audioRows" :key="row.path" class="row items-center q-col-gutter-sm">
-            <div class="col-12 col-md-5 ellipsis text-caption text-grey-5" :title="row.path">
-              {{ baseName(row.path) }}
+          <div v-for="path in inputPaths" :key="path" class="q-mb-sm">
+            <div class="row items-center q-col-gutter-sm">
+              <div class="col-12 col-md-5 ellipsis text-caption text-grey-5" :title="path">
+                {{ baseName(path) }}
+              </div>
+              <div class="col-12 col-md">
+                <q-select
+                  v-if="(audioState[path]?.tracks?.length ?? 0) >= 2"
+                  v-model="audioState[path].selected"
+                  :options="audioOptions(path)"
+                  :display-value="(audioState[path]?.selected ?? []).join(', ')"
+                  dense
+                  multiple
+                  emit-value
+                  map-options
+                >
+                  <template #option="{ itemProps, opt, selected, toggleOption }">
+                    <q-item v-bind="itemProps">
+                      <q-item-section>
+                        <q-item-label>{{ opt.label }}</q-item-label>
+                      </q-item-section>
+                      <q-item-section side>
+                        <q-toggle
+                          :model-value="selected"
+                          @update:model-value="toggleOption(opt)"
+                          dense
+                        />
+                      </q-item-section>
+                    </q-item>
+                  </template>
+                </q-select>
+                <div v-else class="text-caption text-grey-7">
+                  <template v-if="audioState[path]?.loading">checking…</template>
+                  <template v-else-if="audioState[path]?.tracks">nothing to select</template>
+                  <template v-else>unavailable</template>
+                </div>
+              </div>
+              <div class="col-auto">
+                <q-btn
+                  dense
+                  flat
+                  size="sm"
+                  icon="playlist_add"
+                  label="Add audio"
+                  @click="openAudioPicker(path)"
+                />
+              </div>
             </div>
-            <div class="col-12 col-md">
-              <q-select
-                v-model="audioState[row.path].selected"
-                :options="audioOptions(row.path)"
-                :display-value="row.state.selected.join(', ')"
+            <div v-if="(audioAdd[path] ?? []).length > 0" class="q-ml-md q-mt-xs">
+              <q-chip
+                v-for="(item, idx) in audioAdd[path]"
+                :key="idx"
+                removable
                 dense
-                multiple
-                emit-value
-                map-options
+                icon="library_music"
+                @remove="audioAdd[path]?.splice(idx, 1)"
               >
-                <template #option="{ itemProps, opt, selected, toggleOption }">
-                  <q-item v-bind="itemProps">
-                    <q-item-section>
-                      <q-item-label>{{ opt.label }}</q-item-label>
-                    </q-item-section>
-                    <q-item-section side>
-                      <q-toggle
-                        :model-value="selected"
-                        @update:model-value="toggleOption(opt)"
-                        dense
-                      />
-                    </q-item-section>
-                  </q-item>
-                </template>
-              </q-select>
+                [{{ item.label }}] {{ baseName(item.path) }}
+              </q-chip>
             </div>
-          </div>
-          <div v-if="probingCount > 0" class="text-caption text-grey-7">
-            Checking audio tracks ({{ probingCount }} left)…
           </div>
         </div>
       </q-card-section>
@@ -96,14 +125,21 @@
         :mime="['video/*']"
         @confirm="onFilesPicked"
       />
+
+      <FileExplorerDialog
+        v-model="audioBrowserOpen"
+        :mime="['audio/*']"
+        @confirm="onAudioPicked"
+      />
     </q-card>
   </q-dialog>
 </template>
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
+import { useQuasar } from 'quasar';
 import FileExplorerDialog from './FileExplorerDialog.vue';
-import { probeFile, type AudioTrack } from '@/services/tasks';
+import { probeFile, type AudioTrack, type AudioAdd } from '@/services/tasks';
 
 const REMAP_PATH = '/mnt/NAS';
 
@@ -112,6 +148,8 @@ interface FileAudioState {
   selected: number[];
   loading: boolean;
 }
+
+const $q = useQuasar();
 
 const props = defineProps<{
   modelValue: boolean;
@@ -129,11 +167,15 @@ const show = computed({
 
 const filesText = ref('');
 const browserOpen = ref(false);
+const audioBrowserOpen = ref(false);
+const audioPickFor = ref<string | null>(null);
 const quality = ref(5);
 const output = ref('');
 const resolution = ref('original');
+const createPaused = ref(false);
 const loading = ref(false);
 const audioState = ref<Record<string, FileAudioState>>({});
+const audioAdd = ref<Record<string, AudioAdd[]>>({});
 
 const resolutionOptions = [
   { label: 'Original', value: 'original' },
@@ -208,6 +250,9 @@ function syncAudioProbes(): void {
   for (const key of Object.keys(audioState.value)) {
     if (!paths.includes(key)) delete audioState.value[key];
   }
+  for (const key of Object.keys(audioAdd.value)) {
+    if (!paths.includes(key)) delete audioAdd.value[key];
+  }
   const missing = paths.filter((p) => !(p in audioState.value));
   if (missing.length === 0) return;
   for (const p of missing) {
@@ -222,15 +267,46 @@ watch(filesText, () => {
   probeTimer = setTimeout(syncAudioProbes, 500);
 });
 
-const audioRows = computed(() =>
-  Object.entries(audioState.value)
-    .filter(([, state]) => (state.tracks?.length ?? 0) >= 2)
-    .map(([path, state]) => ({ path, state }))
-);
+const inputPaths = computed(() => parseFiles(filesText.value));
 
-const probingCount = computed(
-  () => Object.values(audioState.value).filter((s) => s.loading).length
-);
+function openAudioPicker(path: string): void {
+  audioPickFor.value = path;
+  audioBrowserOpen.value = true;
+}
+
+function promptLabel(fileName: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    $q.dialog({
+      title: 'Audio track label',
+      message: `How to label the audio track from "${fileName}"?`,
+      prompt: {
+        model: '',
+        type: 'text',
+        isValid: (v: string) => v.trim().length > 0,
+      },
+      cancel: true,
+    })
+      .onOk((label: string) => resolve(label))
+      .onCancel(() => resolve(null));
+  });
+}
+
+async function onAudioPicked(paths: string[]): Promise<void> {
+  const target = audioPickFor.value;
+  audioPickFor.value = null;
+  if (!target) return;
+  const existing = audioAdd.value[target] ?? [];
+  for (const raw of paths) {
+    const path = raw.trim();
+    if (!path || existing.some((a) => a.path === path)) continue;
+    const label = await promptLabel(baseName(path));
+    if (label === null) continue;
+    existing.push({ path, label: label.trim() });
+  }
+  if (existing.length > 0) {
+    audioAdd.value[target] = existing;
+  }
+}
 
 function onFilesPicked(paths: string[]): void {
   const merged = parseFiles(filesText.value);
@@ -250,8 +326,12 @@ function reset() {
   quality.value = 5;
   output.value = '';
   resolution.value = 'original';
+  createPaused.value = false;
   loading.value = false;
   audioState.value = {};
+  audioAdd.value = {};
+  audioPickFor.value = null;
+  audioBrowserOpen.value = false;
   if (probeTimer) {
     clearTimeout(probeTimer);
     probeTimer = null;
@@ -313,6 +393,12 @@ async function submit() {
       const state = audioState.value[input];
       if (state?.tracks && state.selected.length < state.tracks.length) {
         payload.audio = [...state.selected].sort((a, b) => a - b);
+      }
+      if ((audioAdd.value[input] ?? []).length > 0) {
+        payload.audio_add = audioAdd.value[input];
+      }
+      if (createPaused.value) {
+        payload.paused = true;
       }
       payloads.push(payload);
     }

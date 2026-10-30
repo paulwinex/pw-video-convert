@@ -103,7 +103,6 @@
       :rows="filteredTasks"
       :columns="columns"
       row-key="uuid"
-      :row-props="rowProps"
       :pagination="{ rowsPerPage: 0 }"
       hide-bottom
       no-data-label="No tasks"
@@ -111,13 +110,13 @@
       <template #body-cell-order="props">
         <q-td :props="props">
           <q-icon
-            v-if="props.row.status === 'pending' && canDrag"
+            v-if="isDraggable(props.row) && canDrag"
             name="drag_indicator"
             size="20px"
             color="grey-6"
             class="drag-handle"
           >
-            <q-tooltip>Drag to change queue order</q-tooltip>
+            <q-tooltip>Drag to reorder (bottom of the list runs first)</q-tooltip>
           </q-icon>
         </q-td>
       </template>
@@ -441,11 +440,12 @@ const tableRef = ref<any>(null);
 let sortable: Sortable | null = null;
 let reorderInFlight = false;
 
-function rowProps(row: Task): Record<string, unknown> {
-  return {
-    'data-uuid': row.uuid,
-    'data-pending': row.status === 'pending' ? 'true' : 'false',
-  };
+// Only waiting and stopped tasks can be moved; once a task starts,
+// finishes or fails, its place in the list is pinned.
+function isDraggable(t: Task): boolean {
+  return (
+    t.status === 'pending' || t.status === 'paused' || t.status === 'canceled'
+  );
 }
 
 function ensureSortable(): void {
@@ -457,16 +457,6 @@ function ensureSortable(): void {
     handle: '.drag-handle',
     animation: 150,
     ghostClass: 'drag-ghost',
-    // pending rows form a contiguous block; forbid dropping outside it
-    onMove: (evt) => {
-      const related = evt.related as HTMLElement | null;
-      if (!related) {
-        const children = tbody.children;
-        const last = children[children.length - 1] as HTMLElement | null;
-        return last?.dataset.pending === 'true';
-      }
-      return related.dataset.pending === 'true';
-    },
     onEnd: (evt) => void onDragEnd(evt),
   });
 }
@@ -489,34 +479,24 @@ async function onDragEnd(evt: SortableEvent): Promise<void> {
     return;
   }
 
+  // tbody children map 1:1 to filteredTasks, so the indexes are row indexes
   const rows = filteredTasks.value;
-  const uuid = (item as HTMLElement).dataset.uuid;
-  const firstPendingIdx = rows.findIndex((r) => r.status === 'pending');
-  if (!uuid || firstPendingIdx < 0) return;
+  const dragged = rows[oldIndex];
+  if (!dragged || !isDraggable(dragged)) return;
 
-  const uuids = rows
-    .filter((r) => r.status === 'pending')
-    .map((r) => r.uuid);
-  const fromIdx = uuids.indexOf(uuid);
-  if (fromIdx < 0) return;
-  // tbody indexes include the running row(s) above the pending block
-  const toIdx = Math.max(
-    0,
-    Math.min(newIndex - firstPendingIdx, uuids.length - 1)
-  );
-  if (toIdx === fromIdx) return;
-  const [moved] = uuids.splice(fromIdx, 1);
+  const uuids = rows.map((r) => r.uuid);
+  const [moved] = uuids.splice(oldIndex, 1);
   if (moved === undefined) return;
-  uuids.splice(toIdx, 0, moved);
+  uuids.splice(newIndex, 0, moved);
 
-  // optimistic local move so the row lands immediately
-  const position = new Map(uuids.map((u, i) => [u, i]));
+  // optimistic local move so the row lands immediately; the list top has
+  // the highest position
+  const position = new Map(uuids.map((u, i) => [u, uuids.length - 1 - i]));
   tasks.value = tasks.value
-    .map((t) =>
-      t.status === 'pending'
-        ? { ...t, queue_order: position.get(t.uuid) ?? null }
-        : t
-    )
+    .map((t) => ({
+      ...t,
+      queue_order: position.get(t.uuid) ?? t.queue_order,
+    }))
     .sort(compareTasks);
 
   reorderInFlight = true;
